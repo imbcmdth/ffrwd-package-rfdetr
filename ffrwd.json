@@ -1,0 +1,54 @@
+{
+  "name": "ffrwd/rfdetr",
+  "version": "0.1.0",
+  "description": "(draft) RF-DETR detection and instance segmentation, hosted in wasm: one model family, one record shape, and utilities that turn its rows into mattes or drawn overlays. Everything downstream is native ffmpeg. The weights are Roboflow's (Apache-2.0), fetched at install.",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/imbcmdth/ffrwd-package-rfdetr",
+  "capabilities": [
+    "nn"
+  ],
+  "dependencies": {
+    "ffrwd/wasm": "0.15.0",
+    "ffrwd/mask_tools": "1.0.3"
+  },
+  "keywords": [
+    "rfdetr",
+    "detr",
+    "detection",
+    "segmentation",
+    "mask",
+    "matte",
+    "blur",
+    "mosaic",
+    "privacy",
+    "nn"
+  ],
+  "lib": {
+    "detect": "src/model.sql",
+    "segment_mask": "src/model.sql",
+    "boxes_mask": "src/boxes.sql",
+    "draw_boxes": "src/boxes.sql"
+  },
+  "bin": {
+    "blur-people": "recipes/blur-people.sql",
+    "mosaic-people": "recipes/mosaic-people.sql",
+    "spotlight": "recipes/spotlight.sql",
+    "replace-background": "recipes/replace-background.sql",
+    "draw": "recipes/draw.sql",
+    "detections": "recipes/detections.sql"
+  },
+  "models": {
+    "detect": {
+      "repo": "imbcmdth/rfdetr-onnx",
+      "revision": "9690caf9f62195acb985155b2b67224e623e1443",
+      "file": "rf-detr-large-2026.onnx",
+      "sha256": "da7f1bc118c6071b48096149b5df01eb1caeb3bb60a262949ac0e41f7c96f705"
+    },
+    "segment_mask": {
+      "repo": "imbcmdth/rfdetr-onnx",
+      "revision": "9690caf9f62195acb985155b2b67224e623e1443",
+      "file": "rf-detr-seg-large.onnx",
+      "sha256": "e6154493b7ba38c285f416db812589267a7292a736fa8564577bcd27a9012e9e"
+    }
+  }
+}
