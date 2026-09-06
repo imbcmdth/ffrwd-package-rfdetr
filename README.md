@@ -1,32 +1,8 @@
-<!-- draft: maintainer to rewrite -->
 # ffrwd/rfdetr
 
-RF-DETR detection and instance segmentation, hosted in wasm. One model
-family, one record shape, then composition: `detect` produces rows,
+RF-DETR detection and instance segmentatio. Same API as YOLO26: `detect` produces rows,
 `segment_mask` produces a matte, the utilities turn rows into mattes or
-drawn overlays, and everything downstream is native ffmpeg. It is
-`ffrwd/yolo26`'s shape exactly, so a query swaps one package name for
-the other and nothing else moves.
-
-## License
-
-This package is **Apache-2.0**, and so are the weights. RF-DETR is
-Roboflow's real-time detection transformer; its Nano through Large
-sizes are released under Apache-2.0, and this package pins two of the
-Large ones. The XLarge and 2XLarge sizes are under Roboflow's own
-license and are not used here. That is the reason this package exists
-beside yolo26, whose Ultralytics weights are AGPL-3.0: the same two
-jobs, done by a model you can run anywhere.
-
-The weights are not in the archive: the manifest pins them - repo,
-revision, file and sha256 - and `ffrwd install` fetches and verifies
-them. Both are fp32 ONNX exports made with Roboflow's own exporter
-from the official checkpoints, and live in
-[imbcmdth/rfdetr-onnx](https://huggingface.co/imbcmdth/rfdetr-onnx)
-with the checkpoint hashes and the export script beside them: RF-DETR
-Large at 704x704 for detection and RF-DETR Seg Large at 504x504 for
-segmentation, about 266 MB together, run through `wasi:nn` on the
-machine's own ONNX Runtime.
+drawn overlays, and everything downstream is native ffmpeg.
 
 ## Model exports
 
@@ -61,9 +37,7 @@ ARRAY(SELECT r FROM unnest(ffrwd.rfdetr.detect(v).boxes) r
 The composition layer lives in `ffrwd/mask_tools` - `blur_where`,
 `mosaic_where`, `spotlight`, `cutout` and the `masked` spelling they
 share - because it is model-agnostic: any grayscale matte beside any
-stream, all native ffmpeg. This package's recipes call it as
-`ffrwd.mask_tools.blur_where(...)` and so on, feeding it the mattes
-`segment_mask` and `boxes_mask` produce.
+stream, all native ffmpeg.
 
 ## Recipes
 
@@ -85,6 +59,20 @@ ffrwd install -g ffrwd/wasm
 cargo build --target wasm32-wasip2 --release
 ```
 
-The weights are fetched at `ffrwd install` time by whoever installs
-the published package; a development checkout runs the recipes only
-after placing the pinned models beside the built modules.
+## License
+
+This package is **Apache-2.0**, and so are the weights. RF-DETR is
+Roboflow's real-time detection transformer; its Nano through Large
+sizes are released under Apache-2.0, and this package pins two of the
+Large ones.
+
+The weights are not in the archive: the manifest pins them - repo,
+revision, file and sha256 - and `ffrwd install` fetches and verifies
+them. Both are fp32 ONNX exports made with Roboflow's own exporter
+from the official checkpoints, and live in
+[imbcmdth/rfdetr-onnx](https://huggingface.co/imbcmdth/rfdetr-onnx)
+with the checkpoint hashes and the export script beside them: RF-DETR
+Large at 704x704 for detection and RF-DETR Seg Large at 504x504 for
+segmentation, about 266 MB together, run through `wasi:nn` on the
+machine's own ONNX Runtime.
+
