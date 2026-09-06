@@ -72,7 +72,7 @@ stream, all native ffmpeg. This package's recipes call it as
 read the header of the recipe file.
 
 ```
-ffrwd ffrwd.rfdetr.blur-people -v source=street.mp4 -v dest=blurred.mp4
+ffrwd run ffrwd/rfdetr:blur-people -v source=street.mp4 -v dest=blurred.mp4
 ```
 
 ## Building
