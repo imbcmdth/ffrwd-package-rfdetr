@@ -1,13 +1,14 @@
-//! Object detection: every frame passes through untouched, with one row per
-//! object beside it - the class as COCO label text, the confidence, and the
-//! box in the frame's own pixels.
+//! Face detection: every frame passes through untouched, with one row per
+//! face beside it - the class always `face`, the confidence, and the box in
+//! the frame's own pixels. The rows are `detect`'s rows, so `boxes_mask` and
+//! `draw_boxes` read them without knowing which detector wrote them.
 //!
-//! The graph is RF-DETR Large's export, run through `wasi:nn`. A DETR head
-//! returns a fixed set of queries with no duplicates among them, so there is
-//! no NMS: decoding is a sigmoid over each query's class logits, a threshold,
-//! and a coordinate map. The module never opens a file - the host binds the
-//! graph to a name with `-nn detect=<path>` and this module asks for that
-//! name and nothing else.
+//! The graph is RF-DETR Medium fine-tuned on one class, run through
+//! `wasi:nn`. A DETR head returns a fixed set of queries with no duplicates
+//! among them, so there is no NMS: decoding is a sigmoid over each query's
+//! one class logit, a threshold, and a coordinate map. The module never opens
+//! a file - the host binds the graph to a name with `-nn detect_faces=<path>`
+//! and this module asks for that name and nothing else.
 
 // `generate_all`: the world's interfaces come from two other packages -
 // ffrwd:av and wasi:nn - and without it bindgen expects them to have been
@@ -15,7 +16,7 @@
 wit_bindgen::generate!({
     path: ["wit", "wit-world"],
     // Fully qualified: three packages are in scope, and each has worlds.
-    world: "ffrwd:rfdetr-detect/detect",
+    world: "ffrwd:rfdetr-detect-faces/detect-faces",
     generate_all,
 });
 
@@ -25,14 +26,14 @@ use exports::ffrwd::av::window_filter::{
     Format, FramePayload, Guest, InWindow, Meta, OutFrame, Processed, StreamInfo, WindowMeta,
 };
 use ffrwd_frame::{Filter, Rect, Rgba, IMAGENET};
-use rfdetr_common::{class_name, frame_box, le_f32s, sigmoid};
+use rfdetr_common::{frame_box, le_f32s, sigmoid};
 use serde::{Deserialize, Serialize};
 use wasi::nn::graph::{load_by_name, Graph};
 use wasi::nn::inference::GraphExecutionContext;
 use wasi::nn::tensor::{Tensor, TensorType};
 
-/// The name the host binds the graph to. `-nn detect=<path>`.
-const MODEL: &str = "detect";
+/// The name the host binds the graph to. `-nn detect_faces=<path>`.
+const MODEL: &str = "detect_faces";
 
 /// What the export calls its input tensor.
 const INPUT_NAME: &str = "input";
@@ -42,13 +43,24 @@ const INPUT_NAME: &str = "input";
 const INPUT_INDEX: &str = "0";
 
 /// The square the graph is run at. The export is static at this size.
-const SIDE: usize = 704;
+const SIDE: usize = 576;
 
-/// Class logits per query: COCO's 91-slot category numbering.
-const CLASSES: usize = 91;
+/// Class logits per query: one, and it is the face. The head was fine-tuned
+/// one class wide, so there is no background slot and nothing to take an
+/// argmax over.
+const CLASSES: usize = 1;
+
+/// What every row's class says. The graph knows one thing.
+const FACE: &str = "face";
 
 /// A box's channels: centre, width and height, each a fraction of the picture.
 const BOX_CHANNELS: usize = 4;
+
+/// How many times its own height a box has to be to count as wide.
+const WIDE_ASPECT: f32 = 1.3;
+
+/// The share of the frame a wide box has to cover to count as large.
+const WIDE_AREA: f32 = 0.25;
 
 const PARAMS_SCHEMA: &str = r#"{"type":"object","properties":{"conf":{"type":"number","minimum":0,"maximum":1,"default":0.25}},"additionalProperties":false}"#;
 
@@ -74,7 +86,7 @@ impl Default for Params {
     }
 }
 
-/// One row per detection, the box in the frame's own pixels.
+/// One row per face, the box in the frame's own pixels.
 #[derive(Serialize)]
 struct Row {
     class: String,
@@ -85,10 +97,10 @@ struct Row {
     h: u32,
 }
 
-/// One object out of the graph's queries, already on the frame's own axes.
+/// One face out of the graph's queries, already on the frame's own axes. It
+/// carries no class: every query this head answers is the one class.
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct Found {
-    class: usize,
     conf: f32,
     x: u32,
     y: u32,
@@ -119,11 +131,12 @@ fn parse_params(params: &str) -> Result<Params, String> {
     let parsed: Params = if trimmed.is_empty() {
         Params::default()
     } else {
-        serde_json::from_str(trimmed).map_err(|e| format!("detect cannot read its params: {e}"))?
+        serde_json::from_str(trimmed)
+            .map_err(|e| format!("detect_faces cannot read its params: {e}"))?
     };
     if !parsed.conf.is_finite() || !(0.0..=1.0).contains(&parsed.conf) {
         return Err(format!(
-            "detect needs conf between 0 and 1, got {}",
+            "detect_faces needs conf between 0 and 1, got {}",
             parsed.conf
         ));
     }
@@ -145,13 +158,14 @@ fn failed(what: &str, error: &wasi::nn::errors::Error) -> String {
         ErrorCode::Security => "security",
         ErrorCode::Unknown => "unknown",
     };
-    format!("detect: {what}: {code} ({})", error.data())
+    format!("detect_faces: {what}: {code} ({})", error.data())
 }
 
 /// Which returned tensor is the boxes and which the class logits, by shape:
-/// both are rank 3 over the same queries, and the last dimension tells them
-/// apart. Names are not read, so an export that spells them differently - or
-/// hands them back in the other order - still resolves.
+/// both are rank 3 over the same queries, and the last dimension - four
+/// coordinates against the one class - tells them apart. Names are not read,
+/// so an export that spells them differently - or hands them back in the
+/// other order - still resolves.
 fn outputs(shapes: &[Vec<u32>]) -> Result<(usize, usize), String> {
     let by_channels = |want: usize| {
         shapes.iter().position(
@@ -161,7 +175,7 @@ fn outputs(shapes: &[Vec<u32>]) -> Result<(usize, usize), String> {
     match (by_channels(BOX_CHANNELS), by_channels(CLASSES)) {
         (Some(boxes), Some(logits)) => Ok((boxes, logits)),
         _ => Err(format!(
-            "detect: the graph returned {shapes:?}, and this module wants \
+            "detect_faces: the graph returned {shapes:?}, and this module wants \
              RF-DETR's [1, queries, {BOX_CHANNELS}] boxes beside \
              [1, queries, {CLASSES}] class logits"
         )),
@@ -169,9 +183,11 @@ fn outputs(shapes: &[Vec<u32>]) -> Result<(usize, usize), String> {
 }
 
 /// The queries thresholded and brought onto the frame. Each query's box is
-/// `cx, cy, w, h` as a fraction of the picture, and its class is whichever of
-/// the logits is largest once through the logistic curve. A DETR head returns
-/// no duplicates, so a query that clears the threshold is a row.
+/// `cx, cy, w, h` as a fraction of the picture, and its confidence is its one
+/// logit through the logistic curve - the head is one class wide, so there is
+/// no argmax to take. A DETR head returns no duplicates, so a query that
+/// clears the threshold is a row, bar the whole-frame box it answers a crowd
+/// with.
 fn decode(
     boxes: &[f32],
     logits: &[f32],
@@ -181,22 +197,14 @@ fn decode(
 ) -> Result<Vec<Found>, String> {
     if boxes.len() / BOX_CHANNELS != logits.len() / CLASSES {
         return Err(format!(
-            "detect: the graph returned {} boxes and {} query logits",
+            "detect_faces: the graph returned {} boxes and {} query logits",
             boxes.len() / BOX_CHANNELS,
             logits.len() / CLASSES
         ));
     }
     let mut found = Vec::new();
-    for (query, scores) in logits.as_chunks::<CLASSES>().0.iter().enumerate() {
-        let mut class = 0;
-        let mut best = f32::NEG_INFINITY;
-        for (index, logit) in scores.iter().enumerate() {
-            if *logit > best {
-                best = *logit;
-                class = index;
-            }
-        }
-        let score = sigmoid(best);
+    for (query, logit) in logits.iter().enumerate() {
+        let score = sigmoid(*logit);
         if score < conf {
             continue;
         }
@@ -209,22 +217,32 @@ fn decode(
         if x0 == x1 || y0 == y1 {
             continue;
         }
+        let (w, h) = (x1 - x0, y1 - y0);
+        // The head's whole-frame answer, which arrives on a crowd at a middling
+        // confidence. A face is taller than it is wide, or near square when the
+        // head is tilted, so a box both this wide and this large is not one - a
+        // wide box that is small is a face half behind something, and a large
+        // box that is tall is a face close to the camera, and both stay.
+        let wide = w as f32 > h as f32 * WIDE_ASPECT;
+        let large = (w * h) as f32 > (width * height) as f32 * WIDE_AREA;
+        if wide && large {
+            continue;
+        }
         found.push(Found {
-            class,
             conf: score,
             x: x0 as u32,
             y: y0 as u32,
-            w: (x1 - x0) as u32,
-            h: (y1 - y0) as u32,
+            w: w as u32,
+            h: h as u32,
         });
     }
     Ok(found)
 }
 
-/// One detection's row, as the NDJSON line that rides its frame.
+/// One face's row, as the NDJSON line that rides its frame.
 fn to_row(found: &Found) -> String {
     serde_json::to_string(&Row {
-        class: class_name(found.class),
+        class: FACE.to_string(),
         // To four places: the graph's own precision is nowhere near the
         // sixteen digits an f32 widened to an f64 prints.
         conf: (f64::from(found.conf) * 10_000.0).round() / 10_000.0,
@@ -283,13 +301,13 @@ fn run(opened: &Opened, frame: &[u8]) -> Result<Vec<String>, String> {
     Ok(found.iter().map(to_row).collect())
 }
 
-struct Detect;
+struct DetectFaces;
 
-impl Guest for Detect {
+impl Guest for DetectFaces {
     fn describe() -> WindowMeta {
         WindowMeta {
             meta: Meta {
-                name: "detect".to_string(),
+                name: "detect_faces".to_string(),
                 version: "0.1.0".to_string(),
                 params_schema: PARAMS_SCHEMA.to_string(),
                 rows_schema: ROWS_SCHEMA.to_string(),
@@ -312,11 +330,11 @@ impl Guest for Detect {
 
     fn init(format: Format, _stream_info: StreamInfo, params: String) -> Result<(), String> {
         let Format::Video(video) = format else {
-            return Err("detect reads frames, and this stream is audio".to_string());
+            return Err("detect_faces reads frames, and this stream is audio".to_string());
         };
         if video.pix_fmt != "rgba" {
             return Err(format!(
-                "detect does not accept pixel format {}",
+                "detect_faces does not accept pixel format {}",
                 video.pix_fmt
             ));
         }
@@ -383,23 +401,28 @@ impl Guest for Detect {
     }
 }
 
-export!(Detect);
+export!(DetectFaces);
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// What the real export returned for one 720x576 frame, captured from a
-    /// run of the pinned graph: the five surest queries, each a box as a
-    /// fraction of the picture beside the class logit that won it. Three
-    /// people, a chair, a screen. The fixture is the decode's contract, not
-    /// the model's.
-    const CAPTURED: [(f32, f32, f32, f32, usize, f32); 5] = [
-        (0.264, 0.548, 0.307, 0.898, 1, 2.976),
-        (0.621, 0.857, 0.270, 0.279, 62, 1.966),
-        (0.523, 0.824, 0.234, 0.347, 1, 1.629),
-        (0.092, 0.901, 0.147, 0.196, 1, 0.364),
-        (0.467, 0.414, 0.905, 0.644, 72, -0.253),
+    /// The frame the capture was taken on: WIDER FACE validation image
+    /// 2--Demonstration/2_Demonstration_Protesters_2_738.jpg, ten annotated
+    /// faces, five of them over 96 px.
+    const WIDTH: usize = 1024;
+    const HEIGHT: usize = 1428;
+
+    /// What the real export returned for that frame, captured from a run of
+    /// the pinned graph: the five surest queries, each a box as a fraction of
+    /// the picture beside the one class logit the head carries. The fixture
+    /// is the decode's contract, not the model's.
+    const CAPTURED: [(f32, f32, f32, f32, f32); 5] = [
+        (0.951608, 0.792185, 0.096596, 0.131434, 1.986528),
+        (0.055047, 0.925899, 0.110031, 0.147960, 1.979382),
+        (0.768078, 0.763318, 0.119112, 0.115945, 1.794836),
+        (0.297883, 0.663443, 0.120973, 0.103971, 1.708497),
+        (0.327975, 0.066133, 0.058301, 0.058259, 1.286335),
     ];
 
     /// The captured queries as the two tensors the graph hands back, plus the
@@ -407,62 +430,83 @@ mod tests {
     fn captured(padding: usize) -> (Vec<f32>, Vec<f32>) {
         let mut boxes = Vec::new();
         let mut logits = Vec::new();
-        for (cx, cy, w, h, class, logit) in CAPTURED {
+        for (cx, cy, w, h, logit) in CAPTURED {
             boxes.extend([cx, cy, w, h]);
-            let mut scores = vec![-10.0f32; CLASSES];
-            scores[class] = logit;
-            logits.extend(scores);
+            logits.push(logit);
         }
         for _ in 0..padding {
             boxes.extend([0.5, 0.5, 0.1, 0.1]);
-            logits.extend(vec![-10.0f32; CLASSES]);
+            logits.push(-10.0);
         }
         (boxes, logits)
     }
 
     fn decoded(conf: f32) -> Vec<Found> {
         let (boxes, logits) = captured(0);
-        decode(&boxes, &logits, conf, 720, 576).expect("the tensors agree")
+        decode(&boxes, &logits, conf, WIDTH, HEIGHT).expect("the tensors agree")
     }
 
     #[test]
-    fn the_captured_tensors_decode_to_one_row_per_object() {
+    fn the_captured_tensors_decode_to_one_row_per_face() {
         let found = decoded(0.25);
         assert_eq!(found.len(), 5, "every captured query clears 0.25");
-        assert_eq!(found[0].class, 1, "the surest object is a person");
-        assert_eq!(found[1].class, 62, "and the second is the chair");
-        for object in &found {
-            assert!(object.x + object.w <= 720, "boxes stay on the picture");
-            assert!(object.y + object.h <= 576);
+        for face in &found {
+            assert!(face.x + face.w <= WIDTH as u32, "boxes stay on the picture");
+            assert!(face.y + face.h <= HEIGHT as u32);
+            assert!(face.conf > 0.78, "the five surest are all well clear");
         }
-        // The centre is 0.264 of 720 and the width 0.307, so the left edge is
-        // (0.264 - 0.1535) * 720.
-        assert_eq!(found[0].x, 79);
-        assert_eq!(found[0].y, 57);
+        // The centre is 0.951608 of 1024 and the width 0.096596, so the left
+        // edge is (0.951608 - 0.048298) * 1024 and the right runs off the
+        // frame and clips to it.
+        assert_eq!((found[0].x, found[0].w), (924, 100));
+        // And 0.792185 of 1428 with a height of 0.131434.
+        assert_eq!((found[0].y, found[0].h), (1037, 189));
     }
 
     #[test]
     fn the_threshold_drops_what_scores_under_it() {
-        let found = decoded(0.5);
-        assert_eq!(found.len(), 4, "the screen, at 0.437, is the one that goes");
-        assert!(found.iter().all(|object| object.conf >= 0.5));
+        let found = decoded(0.8);
+        assert_eq!(found.len(), 4, "the one at 0.7835 is what goes");
+        assert!(found.iter().all(|face| face.conf >= 0.8));
+        assert!(decoded(0.9).is_empty(), "and past the surest, nothing left");
     }
 
     #[test]
     fn the_quiet_queries_a_detr_head_returns_never_decode() {
-        // The head always returns its full set; the ones that found nothing
-        // score far under any threshold.
+        // The head always returns its full set - 300 queries - and the ones
+        // that found nothing score far under any threshold.
         let (boxes, logits) = captured(295);
-        let found = decode(&boxes, &logits, 0.25, 720, 576).expect("the tensors agree");
+        assert_eq!(logits.len(), 300);
+        let found = decode(&boxes, &logits, 0.25, WIDTH, HEIGHT).expect("the tensors agree");
         assert_eq!(found.len(), 5);
+    }
+
+    #[test]
+    fn the_wide_whole_frame_box_goes_and_the_faces_beside_it_stay() {
+        // Wide and most of the picture: the head's whole-frame answer. Beside
+        // it a close-up, as large but taller than wide, and a face half behind
+        // something, as wide but small - a row each.
+        let boxes = [
+            0.5, 0.5, 0.95, 0.4, //
+            0.5, 0.5, 0.5, 0.6, //
+            0.5, 0.5, 0.3, 0.1,
+        ];
+        let logits = [5.0, 5.0, 5.0];
+        let found = decode(&boxes, &logits, 0.25, WIDTH, HEIGHT).expect("the tensors agree");
+        assert_eq!(found.len(), 2, "only the wide whole-frame box goes");
+        assert_eq!((found[0].w, found[0].h), (512, 858), "the close-up stays");
+        assert_eq!(
+            (found[1].w, found[1].h),
+            (308, 144),
+            "and so does the small"
+        );
     }
 
     #[test]
     fn a_box_naming_no_pixel_of_the_picture_is_dropped() {
         let boxes = [1.6, 0.5, 0.2, 0.2];
-        let mut logits = vec![-10.0f32; CLASSES];
-        logits[1] = 5.0;
-        assert!(decode(&boxes, &logits, 0.25, 720, 576)
+        let logits = [5.0];
+        assert!(decode(&boxes, &logits, 0.25, WIDTH, HEIGHT)
             .expect("the tensors agree")
             .is_empty());
     }
@@ -470,38 +514,38 @@ mod tests {
     #[test]
     fn tensors_that_disagree_on_how_many_queries_are_refused_by_name() {
         let boxes = [0.5, 0.5, 0.2, 0.2, 0.4, 0.4, 0.2, 0.2];
-        let logits = vec![-10.0f32; CLASSES];
-        let error = decode(&boxes, &logits, 0.25, 720, 576).expect_err("two boxes, one query");
-        assert!(error.starts_with("detect: "), "{error}");
+        let logits = [1.0];
+        let error =
+            decode(&boxes, &logits, 0.25, WIDTH, HEIGHT).expect_err("two boxes, one query");
+        assert!(error.starts_with("detect_faces: "), "{error}");
     }
 
     #[test]
-    fn a_row_spells_the_class_as_text_and_rounds_the_confidence() {
+    fn a_row_spells_the_class_face_and_rounds_the_confidence() {
         assert_eq!(
             to_row(&Found {
-                class: 1,
-                conf: 0.95132,
-                x: 79,
-                y: 57,
-                w: 221,
-                h: 517,
+                conf: 0.87941,
+                x: 924,
+                y: 1037,
+                w: 100,
+                h: 189,
             }),
-            r#"{"class":"person","conf":0.9513,"x":79,"y":57,"w":221,"h":517}"#
+            r#"{"class":"face","conf":0.8794,"x":924,"y":1037,"w":100,"h":189}"#
         );
     }
 
     #[test]
     fn the_two_returned_tensors_are_told_apart_by_shape_in_either_order() {
         assert_eq!(
-            outputs(&[vec![1, 300, 4], vec![1, 300, 91]]).expect("both found"),
+            outputs(&[vec![1, 300, 4], vec![1, 300, 1]]).expect("both found"),
             (0, 1)
         );
         assert_eq!(
-            outputs(&[vec![1, 300, 91], vec![1, 300, 4]]).expect("both found"),
+            outputs(&[vec![1, 300, 1], vec![1, 300, 4]]).expect("both found"),
             (1, 0)
         );
-        let error = outputs(&[vec![1, 84, 8400]]).expect_err("a dense grid");
-        assert!(error.starts_with("detect: "), "{error}");
+        let error = outputs(&[vec![1, 300, 4], vec![1, 300, 91]]).expect_err("a COCO head");
+        assert!(error.starts_with("detect_faces: "), "{error}");
     }
 
     #[test]
@@ -516,7 +560,7 @@ mod tests {
     fn params_outside_zero_to_one_are_refused_by_name() {
         for bad in [r#"{"conf":1.5}"#, r#"{"conf":-0.1}"#] {
             let error = parse_params(bad).expect_err(bad);
-            assert!(error.starts_with("detect "), "{error}");
+            assert!(error.starts_with("detect_faces "), "{error}");
         }
         assert!(
             parse_params(r#"{"radius":3}"#).is_err(),

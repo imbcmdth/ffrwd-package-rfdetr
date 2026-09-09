@@ -6,6 +6,7 @@
 members = [
     "common",
     "detect",
+    "detect-faces",
     "segment-mask",
     "boxes-mask",
     "draw-boxes",

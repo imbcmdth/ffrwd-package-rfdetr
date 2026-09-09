@@ -194,7 +194,7 @@ impl Guest for BoxesMask {
                 version: "0.1.0".to_string(),
                 params_schema: PARAMS_SCHEMA.to_string(),
                 rows_schema: String::new(),
-                pixel_formats: vec!["yuv420p".to_string(), "rgba".to_string()],
+                pixel_formats: vec!["rgba".to_string(), "yuv420p".to_string()],
                 sample_formats: vec![],
                 sample_rates: vec![],
                 channel_counts: vec![],

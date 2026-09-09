@@ -1,8 +1,9 @@
 # ffrwd/rfdetr
 
-RF-DETR detection and instance segmentatio. Same API as YOLO26: `detect` produces rows,
-`segment_mask` produces a matte, the utilities turn rows into mattes or
-drawn overlays, and everything downstream is native ffmpeg.
+RF-DETR detection, instance segmentation and face detection. Same API
+as YOLO26: `detect` and `detect_faces` produce rows, `segment_mask`
+produces a matte, the utilities turn rows into mattes or drawn
+overlays, and everything downstream is native ffmpeg.
 
 ## Model exports
 
@@ -10,6 +11,10 @@ drawn overlays, and everything downstream is native ffmpeg.
   `STRUCT(v video_stream, boxes STRUCT(class text, conf number, x number, y number, w number, h number)[])` -
   the picture untouched, one row per object per frame, boxes in the
   frame's own pixels, classes as COCO label text.
+- `detect_faces(v, conf DEFAULT 0.25)` returns the same record with
+  one row per face, every row's class the text `face`. A different
+  model behind the same shape, so `boxes_mask`, `draw_boxes` and the
+  gather spelling below read its rows unchanged.
 - `segment_mask(v, class DEFAULT NULL, conf DEFAULT 0.25)` returns the
   found instances as one grayscale matte, optionally narrowed to one
   class name.
@@ -23,6 +28,33 @@ run time with the gather spelling:
 ARRAY(SELECT r FROM unnest(ffrwd.rfdetr.detect(v).boxes) r
       WHERE r.class = 'person' AND r.conf >= 0.5)
 ```
+
+## Faces
+
+`detect_faces` is for the face itself, not the person around it: the
+box it returns is the head, which is what a privacy blur has to cover
+and what an age or identity model reads. COCO has no face class, so
+this is a second RF-DETR, Medium size, fine-tuned for one class.
+
+It runs at a single 576x576 pass over the whole frame, so how much of
+the frame a face fills decides whether it is found. On WIDER FACE's
+validation set, at the default confidence, it finds 98 in 100 faces
+over 96 px across, 82 in 100 between 32 and 96 px, and 17 in 100
+under 32 px. Footage where the faces that matter are small - a wide
+shot of a room - wants a closer camera or a crop before the
+detector, not a lower threshold.
+
+One answer the head gives is not a face: on a crowd it sometimes
+returns a box covering nearly the whole frame at a middling
+confidence. A face is taller than it is wide, so the module drops a
+box that is both wider than 1.3 times its height and larger than a
+quarter of the frame. A wide box that is small, a face half behind
+something, stays; so does a large box that is tall, a face close to
+the camera.
+
+For a blur, pad the box: `boxes_mask`'s `grow` adds pixels around
+each face, and its `feather` softens the edge, so hair and the jaw
+line go with the face. The `blur-faces` recipe defaults to 8 and 4.
 
 ## Utilities
 
@@ -41,18 +73,23 @@ stream, all native ffmpeg.
 
 ## Recipes
 
-`blur-people`, `mosaic-people`, `spotlight`, `replace-background`,
-`draw`, `detections` - run `ffrwd list` for each one's variables, or
-read the header of the recipe file.
+People: `blur-people`, `mosaic-people`, `spotlight`,
+`replace-background`, `draw`, `detections`. Faces: `blur-faces`,
+`mosaic-faces`, `draw-faces`, `faces`. Run `ffrwd list ffrwd/rfdetr`
+for each one's variables, or read the header of the recipe file.
 
 ```
 ffrwd run ffrwd/rfdetr:blur-people -v source=street.mp4 -v dest=blurred.mp4
+ffrwd run ffrwd/rfdetr:blur-faces -v source=class.mp4 -v dest=blurred.mp4
 ```
 
 ## Building
 
 The modules build against the wit from the installed `ffrwd/wasm`
-package:
+package, and the ones that read a picture take the frame as `rgba`,
+converted upstream by ffmpeg with the stream's own range and matrix,
+and turn it into the model's tensor with the
+[ffrwd-frame](https://github.com/imbcmdth/ffrwd-frame) crate:
 
 ```
 ffrwd install -g ffrwd/wasm
@@ -64,15 +101,16 @@ cargo build --target wasm32-wasip2 --release
 This package is **Apache-2.0**, and so are the weights. RF-DETR is
 Roboflow's real-time detection transformer; its Nano through Large
 sizes are released under Apache-2.0, and this package pins two of the
-Large ones.
+Large ones. The face detector is RF-DETR Medium as fine-tuned by
+[Herojayjay/RFDETR-Face-Detection](https://huggingface.co/Herojayjay/RFDETR-Face-Detection),
+also Apache-2.0, on a Kaggle face dataset of about 16,700 images.
 
 The weights are not in the archive: the manifest pins them - repo,
 revision, file and sha256 - and `ffrwd install` fetches and verifies
-them. Both are fp32 ONNX exports made with Roboflow's own exporter
-from the official checkpoints, and live in
+them. All three are fp32 ONNX exports made with Roboflow's own
+exporter from their checkpoints, and live in
 [imbcmdth/rfdetr-onnx](https://huggingface.co/imbcmdth/rfdetr-onnx)
-with the checkpoint hashes and the export script beside them: RF-DETR
-Large at 704x704 for detection and RF-DETR Seg Large at 504x504 for
-segmentation, about 266 MB together, run through `wasi:nn` on the
-machine's own ONNX Runtime.
-
+with the checkpoint hashes and the export scripts beside them: RF-DETR
+Large at 704x704 for detection, RF-DETR Seg Large at 504x504 for
+segmentation and RF-DETR Medium at 576x576 for faces, about 393 MB
+together, run through `wasi:nn` on the machine's own ONNX Runtime.

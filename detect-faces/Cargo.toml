@@ -1,10 +1,10 @@
 [package]
-name = "segment-mask"
+name = "detect-faces"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "segment_mask"
+name = "detect_faces"
 crate-type = ["cdylib"]
 
 [dependencies]

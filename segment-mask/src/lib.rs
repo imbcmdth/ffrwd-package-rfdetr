@@ -12,10 +12,9 @@
 //! file - the host binds the graph to a name with `-nn segment_mask=<path>`
 //! and this module asks for that name and nothing else.
 //!
-//! The matte keeps the instance's own geometry and pixel format, so it feeds
-//! straight into whatever reads a mask beside the picture: in yuv420p the
-//! mask is the luma with neutral chroma, in rgba the same value in red, green
-//! and blue, opaque.
+//! The matte keeps the instance's own geometry, so it feeds straight into
+//! whatever reads a mask beside the picture: the same value in red, green and
+//! blue, opaque.
 
 // `generate_all`: the world's interfaces come from two other packages -
 // ffrwd:av and wasi:nn - and without it bindgen expects them to have been
@@ -32,7 +31,8 @@ use std::cell::{Cell, RefCell};
 use exports::ffrwd::av::window_filter::{
     Format, FramePayload, Guest, InWindow, Meta, OutFrame, Processed, StreamInfo, WindowMeta,
 };
-use rfdetr_common::{class_index, frame_box, le_f32s, sigmoid, to_input, PixFmt, Taps};
+use ffrwd_frame::{Filter, Rect, Rgba, IMAGENET};
+use rfdetr_common::{class_index, frame_box, le_f32s, sigmoid, Taps};
 use serde::Deserialize;
 use wasi::nn::graph::{load_by_name, Graph};
 use wasi::nn::inference::GraphExecutionContext;
@@ -109,7 +109,6 @@ struct Instance {
 struct Opened {
     width: usize,
     height: usize,
-    pix_fmt: PixFmt,
     settled: Settled,
     /// What the graph calls its input, settled by the first call that works.
     input_name: Cell<&'static str>,
@@ -324,21 +323,12 @@ fn matte(
     map
 }
 
-/// A matte written as a frame of the instance's own format: the luma plane
-/// with neutral chroma, or the same value in red, green and blue.
-fn to_frame(map: &[u8], pix_fmt: PixFmt, width: usize, height: usize, len: usize) -> Vec<u8> {
+/// A matte written as an rgba frame: the same value in red, green and blue,
+/// opaque.
+fn to_frame(map: &[u8], len: usize) -> Vec<u8> {
     let mut out = vec![0u8; len];
-    match pix_fmt {
-        PixFmt::Yuv420p => {
-            out[..width * height].copy_from_slice(map);
-            // 128 in both chroma planes is no colour at all.
-            out[width * height..].fill(128);
-        }
-        PixFmt::Rgba => {
-            for (pixel, value) in out.as_chunks_mut::<4>().0.iter_mut().zip(map) {
-                *pixel = [*value, *value, *value, 255];
-            }
-        }
+    for (pixel, value) in out.as_chunks_mut::<4>().0.iter_mut().zip(map) {
+        *pixel = [*value, *value, *value, 255];
     }
     out
 }
@@ -367,7 +357,15 @@ fn compute(opened: &Opened, input: &[u8]) -> Result<Vec<(String, Tensor)>, Strin
 
 /// One frame in, its matte out.
 fn run(opened: &Opened, frame: &[u8], len: usize) -> Result<Vec<u8>, String> {
-    let input = to_input(frame, opened.pix_fmt, opened.width, opened.height, SIDE);
+    let (width, height) = (opened.width, opened.height);
+    let input = ffrwd_frame::tensor(
+        &Rgba::new(frame, width, height)?,
+        Rect::whole(width, height),
+        SIDE,
+        SIDE,
+        Filter::Bilinear,
+        IMAGENET,
+    );
     let returned = compute(opened, &input)?;
     let tensors: Vec<Tensor> = returned.into_iter().map(|(_, tensor)| tensor).collect();
     let shapes: Vec<Vec<u32>> = tensors.iter().map(Tensor::dimensions).collect();
@@ -385,15 +383,9 @@ fn run(opened: &Opened, frame: &[u8], len: usize) -> Result<Vec<u8>, String> {
         &found,
         &le_f32s(&tensors[masks].data()),
         (mask_w, mask_h),
-        (opened.width, opened.height),
+        (width, height),
     );
-    Ok(to_frame(
-        &map,
-        opened.pix_fmt,
-        opened.width,
-        opened.height,
-        len,
-    ))
+    Ok(to_frame(&map, len))
 }
 
 struct SegmentMask;
@@ -406,7 +398,7 @@ impl Guest for SegmentMask {
                 version: "0.1.0".to_string(),
                 params_schema: PARAMS_SCHEMA.to_string(),
                 rows_schema: String::new(),
-                pixel_formats: vec!["yuv420p".to_string(), "rgba".to_string()],
+                pixel_formats: vec!["rgba".to_string()],
                 sample_formats: vec![],
                 sample_rates: vec![],
                 channel_counts: vec![],
@@ -426,7 +418,12 @@ impl Guest for SegmentMask {
         let Format::Video(video) = format else {
             return Err("segment_mask reads frames, and this stream is audio".to_string());
         };
-        let pix_fmt = PixFmt::parse(&video.pix_fmt, "segment_mask")?;
+        if video.pix_fmt != "rgba" {
+            return Err(format!(
+                "segment_mask does not accept pixel format {}",
+                video.pix_fmt
+            ));
+        }
         let settled = parse_params(&params)?;
 
         // The graph is loaded once per instance, and the session built once:
@@ -442,7 +439,6 @@ impl Guest for SegmentMask {
             *o.borrow_mut() = Some(Opened {
                 width: video.width as usize,
                 height: video.height as usize,
-                pix_fmt,
                 settled,
                 input_name: Cell::new(INPUT_NAME),
                 context,
@@ -612,19 +608,9 @@ mod tests {
     }
 
     #[test]
-    fn a_matte_writes_neutral_chroma_and_opaque_alpha() {
+    fn a_matte_writes_the_same_value_in_every_channel_and_opaque_alpha() {
         let map = vec![KEEP; 4 * 4];
-        let yuv = to_frame(&map, PixFmt::Yuv420p, 4, 4, 4 * 4 + 2 * 2 * 2);
-        assert!(
-            yuv[..16].iter().all(|v| *v == KEEP),
-            "the luma is the matte"
-        );
-        assert!(
-            yuv[16..].iter().all(|v| *v == 128),
-            "and the chroma is neutral"
-        );
-
-        let rgba = to_frame(&map, PixFmt::Rgba, 4, 4, 4 * 4 * 4);
+        let rgba = to_frame(&map, 4 * 4 * 4);
         let (pixels, _) = rgba.as_chunks::<4>();
         for pixel in pixels {
             assert_eq!(

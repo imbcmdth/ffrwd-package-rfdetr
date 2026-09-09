@@ -1,7 +1,7 @@
 {
   "name": "ffrwd/rfdetr",
-  "version": "0.1.0",
-  "description": "RF-DETR detection and instance segmentation. The weights are Roboflow's (Apache-2.0), fetched at install.",
+  "version": "0.2.0",
+  "description": "RF-DETR detection, instance segmentation and face detection: rows, mattes and the utilities that turn rows into mattes or drawn overlays. The weights are Roboflow's and a third-party face fine-tune, all Apache-2.0, fetched at install.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/imbcmdth/ffrwd-package-rfdetr",
   "capabilities": [
@@ -21,10 +21,13 @@
     "blur",
     "mosaic",
     "privacy",
+    "face",
+    "faces",
     "nn"
   ],
   "lib": {
     "detect": "src/model.sql",
+    "detect_faces": "src/model.sql",
     "segment_mask": "src/model.sql",
     "boxes_mask": "src/boxes.sql",
     "draw_boxes": "src/boxes.sql"
@@ -35,7 +38,11 @@
     "spotlight": "recipes/spotlight.sql",
     "replace-background": "recipes/replace-background.sql",
     "draw": "recipes/draw.sql",
-    "detections": "recipes/detections.sql"
+    "detections": "recipes/detections.sql",
+    "blur-faces": "recipes/blur-faces.sql",
+    "mosaic-faces": "recipes/mosaic-faces.sql",
+    "draw-faces": "recipes/draw-faces.sql",
+    "faces": "recipes/faces.sql"
   },
   "models": {
     "detect": {
@@ -49,6 +56,12 @@
       "revision": "9690caf9f62195acb985155b2b67224e623e1443",
       "file": "rf-detr-seg-large.onnx",
       "sha256": "e6154493b7ba38c285f416db812589267a7292a736fa8564577bcd27a9012e9e"
+    },
+    "detect_faces": {
+      "repo": "imbcmdth/rfdetr-onnx",
+      "revision": "32130b7778a7eb8f13cf9297e9438bc92c560720",
+      "file": "rf-detr-medium-face.onnx",
+      "sha256": "b594500a99c3a4287805b7afa15eb74ee559be937eb00315768612846f93cc45"
     }
   }
 }
