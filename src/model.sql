@@ -6,7 +6,8 @@
 -- the class as COCO label text, the confidence, and the box in the frame's
 -- own pixels. `detect_faces` returns that same record off a model trained on
 -- one class, so its rows are one per face with the class always `face`, and
--- everything that reads `detect`'s boxes reads these. `segment_mask` returns
+-- everything that reads `detect`'s boxes reads these; `detect_plates` is the
+-- same again for licence plates, the class always `plate`. `segment_mask` returns
 -- the found instances as one grayscale matte, optionally narrowed to one
 -- class name, ready for maskedmerge and everything else that reads a mask
 -- beside the picture.
@@ -19,6 +20,11 @@ CREATE FUNCTION detect_faces(v video_stream, conf number DEFAULT 0.25)
 RETURNS STRUCT(v video_stream, boxes STRUCT(class text, conf number,
                                             x number, y number, w number, h number)[])
   AS 'target/wasm32-wasip2/release/detect_faces.wasm', 'detect_faces' LANGUAGE wasm;
+
+CREATE FUNCTION detect_plates(v video_stream, conf number DEFAULT 0.25)
+RETURNS STRUCT(v video_stream, boxes STRUCT(class text, conf number,
+                                            x number, y number, w number, h number)[])
+  AS 'target/wasm32-wasip2/release/detect_plates.wasm', 'detect_plates' LANGUAGE wasm;
 
 CREATE FUNCTION segment_mask(v video_stream, class text DEFAULT NULL,
                              conf number DEFAULT 0.25)

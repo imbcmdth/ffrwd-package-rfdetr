@@ -1,7 +1,7 @@
 {
   "name": "ffrwd/rfdetr",
-  "version": "0.2.0",
-  "description": "RF-DETR detection, instance segmentation and face detection: rows, mattes and the utilities that turn rows into mattes or drawn overlays. The weights are Roboflow's and a third-party face fine-tune, all Apache-2.0, fetched at install.",
+  "version": "0.3.0",
+  "description": "RF-DETR detection, instance segmentation, face detection and licence plate detection: rows, mattes and the utilities that turn rows into mattes or drawn overlays. The weights are Roboflow's, a third-party face fine-tune and our own plate fine-tune, all Apache-2.0, fetched at install.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/imbcmdth/ffrwd-package-rfdetr",
   "capabilities": [
@@ -23,11 +23,15 @@
     "privacy",
     "face",
     "faces",
-    "nn"
+    "nn",
+    "plate",
+    "plates",
+    "redaction"
   ],
   "lib": {
     "detect": "src/model.sql",
     "detect_faces": "src/model.sql",
+    "detect_plates": "src/model.sql",
     "segment_mask": "src/model.sql",
     "boxes_mask": "src/boxes.sql",
     "draw_boxes": "src/boxes.sql"
@@ -42,7 +46,12 @@
     "blur-faces": "recipes/blur-faces.sql",
     "mosaic-faces": "recipes/mosaic-faces.sql",
     "draw-faces": "recipes/draw-faces.sql",
-    "faces": "recipes/faces.sql"
+    "faces": "recipes/faces.sql",
+    "blur-plates": "recipes/blur-plates.sql",
+    "mosaic-plates": "recipes/mosaic-plates.sql",
+    "draw-plates": "recipes/draw-plates.sql",
+    "plates": "recipes/plates.sql",
+    "redact": "recipes/redact.sql"
   },
   "models": {
     "detect": {
@@ -62,6 +71,12 @@
       "revision": "32130b7778a7eb8f13cf9297e9438bc92c560720",
       "file": "rf-detr-medium-face.onnx",
       "sha256": "b594500a99c3a4287805b7afa15eb74ee559be937eb00315768612846f93cc45"
+    },
+    "detect_plates": {
+      "repo": "imbcmdth/rfdetr-onnx",
+      "revision": "0f5efd86f1c71b5b148a340fce2c3679f4800df1",
+      "file": "rf-detr-medium-plate.onnx",
+      "sha256": "2597bc5f0f71e2a6c8da3983367d774599d0e587b2e298238fd8fb71bd1af337"
     }
   }
 }

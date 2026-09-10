@@ -58,6 +58,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "detect-plates"
+version = "0.1.0"
+dependencies = [
+ "ffrwd-frame",
+ "rfdetr-common",
+ "serde",
+ "serde_json",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "document-features"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
