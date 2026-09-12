@@ -9,8 +9,8 @@
 -- everything that reads `detect`'s boxes reads these; `detect_plates` is the
 -- same again for licence plates, the class always `plate`. `segment_mask` returns
 -- the found instances as one grayscale matte, optionally narrowed to one
--- class name, ready for maskedmerge and everything else that reads a mask
--- beside the picture.
+-- class name, ready for `ffrwd/mask_tools` and everything else that reads a
+-- mask beside the picture.
 CREATE FUNCTION detect(v video_stream, conf number DEFAULT 0.25)
 RETURNS STRUCT(v video_stream, boxes STRUCT(class text, conf number,
                                             x number, y number, w number, h number)[])

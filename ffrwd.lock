@@ -3,7 +3,7 @@
   "reproducible": true,
   "dependencies": {
     "ffrwd/wasm": "0.15.0",
-    "ffrwd/mask_tools": "1.0.3"
+    "ffrwd/mask_tools": "1.1.1"
   },
   "packages": [
     {
@@ -16,9 +16,12 @@
     {
       "kind": "registry",
       "name": "ffrwd/mask_tools",
-      "version": "1.0.3",
-      "sha256": "546b31564b531a76a451b7a30d38a064832bcf05597dec69638b639e69ed43bd",
-      "store": "v1/54/546b31564b531a76a451b7a30d38a064832bcf05597dec69638b639e69ed43bd"
+      "version": "1.1.1",
+      "sha256": "d328202f3596b1ba9234cf634411f900358ecd6ad00de0d7734c04d510636480",
+      "store": "v1/d3/d328202f3596b1ba9234cf634411f900358ecd6ad00de0d7734c04d510636480",
+      "dependencies": {
+        "ffrwd/wasm": "0.15.0"
+      }
     }
   ]
 }

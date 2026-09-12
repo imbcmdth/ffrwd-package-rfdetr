@@ -18,6 +18,6 @@ jobs:
       - name: Install ffrwd and the wit package
         run: |
           pip install ffrwd
-          ffrwd install -g ffrwd/wasm
+          ffrwd install -g "ffrwd/wasm@$(python -c 'import json; print(json.load(open("ffrwd.json"))["dependencies"]["ffrwd/wasm"])')"
       - name: Build the modules
         run: cargo build --target wasm32-wasip2 --release
