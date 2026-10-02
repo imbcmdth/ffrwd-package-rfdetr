@@ -1,15 +1,13 @@
 [package]
-name = "draw-boxes"
-version = "0.2.0"
+name = "fractions"
+version = "0.1.0"
 edition = "2021"
+publish = false
 
 [lib]
-name = "draw_boxes"
-crate-type = ["cdylib"]
+name = "fractions"
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ffrwd-node = { git = "https://github.com/imbcmdth/ffrwd-node", tag = "v0.1.0" }
 serde = { version = "1.0.229", features = ["derive"] }
-
-[dev-dependencies]
-serde_json = "1.0.151"

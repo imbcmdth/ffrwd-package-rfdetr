@@ -8,11 +8,13 @@
 COPY (
   SELECT ffrwd.mask_tools.mosaic_where(
            ffrwd.mask_tools.mosaic_where(
-             v, ffrwd.rfdetr.boxes_mask(ffrwd.rfdetr.detect_faces(v, :conf),
-                                        COALESCE(:grow, 8), COALESCE(:feather, 4)),
+             v, ffrwd.rfdetr.boxes_mask(v, ffrwd.rfdetr.detect_faces(v, :conf),
+                                        grow => COALESCE(:grow, 8),
+                                        feather => COALESCE(:feather, 4)),
              COALESCE(:size, 16)),
-           ffrwd.rfdetr.boxes_mask(ffrwd.rfdetr.detect_plates(v, :conf),
-                                   COALESCE(:grow, 8), COALESCE(:feather, 4)),
+           ffrwd.rfdetr.boxes_mask(v, ffrwd.rfdetr.detect_plates(v, :conf),
+                                   grow => COALESCE(:grow, 8),
+                                   feather => COALESCE(:feather, 4)),
            COALESCE(:size, 16)),
          f.audio
   FROM input(:'source') f, unnest(f.video) v

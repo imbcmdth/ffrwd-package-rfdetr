@@ -1,6 +1,6 @@
 [package]
 name = "detect-faces"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [lib]
@@ -8,8 +8,8 @@ name = "detect_faces"
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.57.1"
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+ffrwd-node = { git = "https://github.com/imbcmdth/ffrwd-node", tag = "v0.1.0" }
 rfdetr-common = { path = "../common" }
-ffrwd-frame = { git = "https://github.com/imbcmdth/ffrwd-frame", tag = "v0.1.0" }
+
+[dev-dependencies]
+serde_json = "1.0.151"

@@ -2,7 +2,7 @@
 # The wasm modules this package ships. They build into
 # target/wasm32-wasip2/release/, which is where the package's lib SQL names
 # them. `common` is shared Rust the modules compile in; it ships nothing of
-# its own.
+# its own. `tests/fractions` is a test fixture no lib SQL names.
 members = [
     "common",
     "detect",
@@ -11,6 +11,7 @@ members = [
     "segment-mask",
     "boxes-mask",
     "draw-boxes",
+    "tests/fractions",
 ]
 resolver = "2"
 

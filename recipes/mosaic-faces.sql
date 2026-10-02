@@ -4,8 +4,9 @@
 -- example: ffrwd compile -f packages/ffrwd/rfdetr/recipes/mosaic-faces.sql -v source=class.mp4 -v dest=mosaic.mp4
 COPY (
   SELECT ffrwd.mask_tools.mosaic_where(
-           v, ffrwd.rfdetr.boxes_mask(ffrwd.rfdetr.detect_faces(v, :conf),
-                                      COALESCE(:grow, 8), COALESCE(:feather, 4)),
+           v, ffrwd.rfdetr.boxes_mask(v, ffrwd.rfdetr.detect_faces(v, :conf),
+                                      grow => COALESCE(:grow, 8),
+                                      feather => COALESCE(:feather, 4)),
            :size), f.audio
   FROM input(:'source') f, unnest(f.video) v
   WHERE v.index = COALESCE(:track, 1)

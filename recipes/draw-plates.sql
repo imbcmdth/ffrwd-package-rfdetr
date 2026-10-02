@@ -3,7 +3,7 @@
 -- variables: source (input media path), conf (confidence threshold, defaults to 0.25), track (video track index, defaults to the first), dest (output path)
 -- example: ffrwd compile -f packages/ffrwd/rfdetr/recipes/draw-plates.sql -v source=dashcam.mp4 -v dest=boxed.mp4
 COPY (
-  SELECT ffrwd.rfdetr.draw_boxes(ffrwd.rfdetr.detect_plates(v, :conf)), f.audio
+  SELECT ffrwd.rfdetr.draw_boxes(v, ffrwd.rfdetr.detect_plates(v, :conf)), f.audio
   FROM input(:'source') f, unnest(f.video) v
   WHERE v.index = COALESCE(:track, 1)
 ) TO :'dest' WITH (video_codec 'libx264', crf 20)

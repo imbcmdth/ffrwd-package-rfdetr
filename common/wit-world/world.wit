@@ -1,0 +1,12 @@
+package ffrwd:rfdetr;
+
+/// What the model nodes import beside the node world ffrwd-node exports:
+/// `wasi:nn`, the standard interface, not anything of ours. They import no
+/// filesystem: the graph file is the host's, and a module only knows the
+/// name it was bound to.
+world nn {
+  import wasi:nn/tensor@0.2.0-rc-2024-10-28;
+  import wasi:nn/graph@0.2.0-rc-2024-10-28;
+  import wasi:nn/inference@0.2.0-rc-2024-10-28;
+  import wasi:nn/errors@0.2.0-rc-2024-10-28;
+}

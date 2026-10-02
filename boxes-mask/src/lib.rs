@@ -1,93 +1,32 @@
-//! Boxes to matte: the annotation rows arriving with each frame are
-//! rasterized into a grayscale mask - 255 inside each box, 0 everywhere
-//! else. `grow` pads every box outward in pixels; `feather` softens the edge
-//! over that many pixels, falling linearly from the box's edge to nothing.
+//! Boxes to matte: the rows paired with each frame are rasterized into a
+//! grayscale mask, 255 inside each box and 0 everywhere else. `grow` pads
+//! every box outward in pixels; `feather` softens the edge over that many
+//! pixels, falling linearly from the box's edge to nothing.
 //!
-//! The picture itself is never read - only its geometry matters - so the
-//! matte can be composed against the original stream by whatever consumes a
-//! mask beside it. A row that is not a box - one an upstream module emitted
-//! for something else - is skipped rather than refused.
+//! The picture itself is never read, only its size, and the matte leaves one
+//! byte a pixel. Any row carrying `x`, `y`, `w` and `h` is a box, so the rows
+//! of every detector, and of a tracker that adds fields of its own, read the
+//! same.
 
-wit_bindgen::generate!({
-    path: "wit",
-    world: "window-module",
-});
-
-use std::cell::RefCell;
-
-use exports::ffrwd::av::window_filter::{
-    Format, FramePayload, Guest, InWindow, Meta, OutFrame, Processed, StreamInfo, WindowMeta,
-};
-use serde::Deserialize;
+use ffrwd_node::{Bound, Init, Input, Node, Out, Output, Result, Shape, Tick};
+use serde::{Deserialize, Serialize};
 
 const PARAMS_SCHEMA: &str = r#"{"type":"object","properties":{"grow":{"type":"number","minimum":0,"maximum":4096,"default":0},"feather":{"type":"number","minimum":0,"maximum":4096,"default":0}},"additionalProperties":false}"#;
 
 #[derive(Clone, Copy, Deserialize)]
-// The schema says these two and no others, and this is what makes that true.
-#[serde(deny_unknown_fields)]
 struct Params {
-    #[serde(default)]
     grow: f64,
-    #[serde(default)]
     feather: f64,
 }
 
-impl Default for Params {
-    fn default() -> Self {
-        Params {
-            grow: 0.0,
-            feather: 0.0,
-        }
-    }
-}
-
-/// One box to rasterize, as an upstream detector reports it. Extra keys are
-/// ignored: a row carrying a class and a confidence beside the four
-/// coordinates is still a box.
-#[derive(Deserialize)]
+/// One box to rasterize: the four fields this module reads, and any others
+/// the row carries pass by.
+#[derive(Default, Serialize, Deserialize)]
 struct Rect {
     x: f64,
     y: f64,
     w: f64,
     h: f64,
-}
-
-/// The pixel format the host chose at `init`, fixed for the instance's life.
-#[derive(Clone, Copy, PartialEq)]
-enum PixFmt {
-    Yuv420p,
-    Rgba,
-}
-
-/// What `init` settled.
-#[derive(Clone, Copy)]
-struct Opened {
-    width: usize,
-    height: usize,
-    pix_fmt: PixFmt,
-    params: Params,
-}
-
-thread_local! {
-    static OPENED: RefCell<Option<Opened>> = const { RefCell::new(None) };
-}
-
-fn parse_params(params: &str) -> Result<Params, String> {
-    let trimmed = params.trim();
-    let parsed: Params = if trimmed.is_empty() {
-        Params::default()
-    } else {
-        serde_json::from_str(trimmed)
-            .map_err(|e| format!("boxes_mask cannot read its params: {e}"))?
-    };
-    for (name, value) in [("grow", parsed.grow), ("feather", parsed.feather)] {
-        if !value.is_finite() || !(0.0..=4096.0).contains(&value) {
-            return Err(format!(
-                "boxes_mask needs {name} between 0 and 4096, got {value}"
-            ));
-        }
-    }
-    Ok(parsed)
 }
 
 /// The alpha of one axis at a pixel centre `p`: full inside `[edge0, edge1]`,
@@ -145,142 +84,78 @@ fn paint(map: &mut [u8], width: usize, height: usize, rect: &Rect, params: Param
     }
 }
 
-/// The matte the rows rasterize to, one byte a pixel.
-fn rasterize(rows: &[String], width: usize, height: usize, params: Params) -> Vec<u8> {
+/// The matte the boxes rasterize to, one byte a pixel.
+fn rasterize(rects: &[Rect], width: usize, height: usize, params: Params) -> Vec<u8> {
     let mut map = vec![0u8; width * height];
-    for row in rows {
-        let Ok(rect) = serde_json::from_str::<Rect>(row) else {
-            continue;
-        };
-        paint(&mut map, width, height, &rect, params);
+    for rect in rects {
+        paint(&mut map, width, height, rect, params);
     }
     map
 }
 
-/// How many bytes one frame of the instance's format takes.
-fn frame_len(pix_fmt: PixFmt, width: usize, height: usize) -> usize {
-    match pix_fmt {
-        PixFmt::Yuv420p => width * height + 2 * width.div_ceil(2) * height.div_ceil(2),
-        PixFmt::Rgba => width * height * 4,
-    }
+struct BoxesMask {
+    v: u32,
+    boxes: u32,
+    width: usize,
+    height: usize,
+    params: Params,
 }
 
-/// A matte written as a frame of the instance's own format: the luma plane
-/// with neutral chroma, or the same value in red, green and blue.
-fn to_frame(map: &[u8], pix_fmt: PixFmt, width: usize, height: usize, len: usize) -> Vec<u8> {
-    let mut out = vec![0u8; len];
-    match pix_fmt {
-        PixFmt::Yuv420p => {
-            out[..width * height].copy_from_slice(map);
-            // 128 in both chroma planes is no colour at all.
-            out[width * height..].fill(128);
-        }
-        PixFmt::Rgba => {
-            for (pixel, value) in out.as_chunks_mut::<4>().0.iter_mut().zip(map) {
-                *pixel = [*value, *value, *value, 255];
-            }
-        }
-    }
-    out
-}
+impl Node for BoxesMask {
+    const NAME: &'static str = "boxes_mask";
+    const VERSION: &'static str = "0.2.0";
+    const PARAMS_SCHEMA: &'static str = PARAMS_SCHEMA;
+    type Params = Params;
 
-struct BoxesMask;
-
-impl Guest for BoxesMask {
-    fn describe() -> WindowMeta {
-        WindowMeta {
-            meta: Meta {
-                name: "boxes_mask".to_string(),
-                version: "0.1.0".to_string(),
-                params_schema: PARAMS_SCHEMA.to_string(),
-                rows_schema: String::new(),
-                pixel_formats: vec!["rgba".to_string(), "yuv420p".to_string()],
-                sample_formats: vec![],
-                sample_rates: vec![],
-                channel_counts: vec![],
-                rows_language: vec![],
-            },
-            window: 1,
-            stride: 1,
-            pure: true,
-            one_to_one: true,
-            // The rows are the boxes this module rasterizes.
-            reads_rows: true,
-            // And they are consumed by it: what leaves is the matte alone.
-            forwards_rows: false,
-            inputs: 1,
-        }
+    fn shape(_: &Params, _: &Bound) -> Result<Shape> {
+        Ok(Shape::new()
+            .input(
+                Input::video("v")
+                    .clock()
+                    .pixel_formats(&["rgba", "yuv420p"]),
+            )
+            .input(Input::rows("boxes").schema::<Rect>())
+            .output(Output::like("v").pixel_format("gray"))
+            .pure()
+            .one_to_one())
     }
 
-    fn init(format: Format, _stream_info: StreamInfo, params: String) -> Result<(), String> {
-        let Format::Video(video) = format else {
-            return Err("boxes_mask reads frames, and this stream is audio".to_string());
-        };
-        let pix_fmt = match video.pix_fmt.as_str() {
-            "yuv420p" => PixFmt::Yuv420p,
-            "rgba" => PixFmt::Rgba,
-            other => return Err(format!("boxes_mask does not accept pixel format {other}")),
-        };
-        let parsed = parse_params(&params)?;
+    fn init(params: Params, init: &Init) -> Result<BoxesMask> {
+        let v = init.stream("v")?;
+        let video = v
+            .video_format()
+            .ok_or("boxes_mask reads frames, and `v` is not video")?;
+        Ok(BoxesMask {
+            v: v.id,
+            boxes: init.stream("boxes")?.id,
+            width: video.width as usize,
+            height: video.height as usize,
+            params,
+        })
+    }
 
-        OPENED.with(|o| {
-            *o.borrow_mut() = Some(Opened {
-                width: video.width as usize,
-                height: video.height as usize,
-                pix_fmt,
-                params: parsed,
-            });
-        });
+    fn set_params(&mut self, params: Params) -> Result<()> {
+        self.params = params;
         Ok(())
     }
 
-    fn set_params(params: String) -> Result<(), String> {
-        let parsed = parse_params(&params)?;
-        OPENED.with(|o| {
-            if let Some(opened) = o.borrow_mut().as_mut() {
-                opened.params = parsed;
-            }
-        });
-        Ok(())
-    }
-
-    fn process(window: &InWindow, _trailing: Vec<String>, _last: bool) -> Processed {
-        // The final call carries nothing: window and stride are 1, so no frame
-        // is ever left over.
-        let opened = OPENED
-            .with(|o| *o.borrow())
-            .expect("init settles the geometry before any frame arrives");
-
-        let mut out = Vec::with_capacity(window.len() as usize);
-        for i in 0..window.len() {
-            let map = rasterize(&window.rows(i), opened.width, opened.height, opened.params);
-            // The picture is never fetched: only the rows are read, and the
-            // matte's size follows from the geometry `init` settled.
-            out.push(OutFrame {
-                pts: window.pts(i),
-                frame: FramePayload::New(to_frame(
-                    &map,
-                    opened.pix_fmt,
-                    opened.width,
-                    opened.height,
-                    frame_len(opened.pix_fmt, opened.width, opened.height),
-                )),
-                // The boxes were the rows' whole purpose; none travel on.
-                rows: vec![],
-            });
-        }
-        Processed {
-            frames: out,
-            trailing: vec![],
-        }
+    fn process(&mut self, tick: &Tick, out: &mut Out) -> Result<()> {
+        let Some(frame) = tick.frame(self.v) else {
+            return Ok(());
+        };
+        let rects: Vec<Rect> = tick.rows(self.boxes)?;
+        let map = rasterize(&rects, self.width, self.height, self.params);
+        Ok(out.frame("v", frame.pts, frame.duration, map)?)
     }
 }
 
-export!(BoxesMask);
+ffrwd_node::export!(BoxesMask);
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ffrwd_node::mock::Harness;
+    use ffrwd_node::{read_params, BoundStream, Payload, Rational};
 
     /// What a matte pixel fully inside a box carries.
     const KEEP: u8 = 255;
@@ -292,14 +167,25 @@ mod tests {
         Params { grow, feather }
     }
 
-    fn rows(items: &[&str]) -> Vec<String> {
-        items.iter().map(|r| r.to_string()).collect()
+    fn rects(rows: &[&str]) -> Vec<Rect> {
+        rows.iter()
+            .map(|row| ffrwd_node::parse(row).unwrap())
+            .collect()
+    }
+
+    fn harness(pix_fmt: &str) -> Harness<BoxesMask> {
+        let tb = Rational::new(1, 25);
+        let bound = vec![
+            BoundStream::video("v", 0, W as u32, H as u32, pix_fmt, tb),
+            BoundStream::rows("boxes", 1, tb),
+        ];
+        Harness::new(r#"{"grow":2}"#, bound).unwrap()
     }
 
     #[test]
     fn a_box_paints_hard_edges_when_nothing_feathers() {
         let map = rasterize(
-            &rows(&[r#"{"class":"person","conf":0.9,"x":10,"y":10,"w":20,"h":10}"#]),
+            &rects(&[r#"{"class":"person","conf":0.9,"x":10,"y":10,"w":20,"h":10}"#]),
             W,
             H,
             params(0.0, 0.0),
@@ -314,7 +200,7 @@ mod tests {
     #[test]
     fn grow_pads_the_box_outward() {
         let map = rasterize(
-            &rows(&[r#"{"x":10,"y":10,"w":20,"h":10}"#]),
+            &rects(&[r#"{"x":10,"y":10,"w":20,"h":10}"#]),
             W,
             H,
             params(4.0, 0.0),
@@ -327,7 +213,7 @@ mod tests {
     #[test]
     fn feather_ramps_from_full_at_the_edge_to_nothing() {
         let map = rasterize(
-            &rows(&[r#"{"x":16,"y":16,"w":16,"h":16}"#]),
+            &rects(&[r#"{"x":16,"y":16,"w":16,"h":16}"#]),
             W,
             H,
             params(0.0, 8.0),
@@ -346,7 +232,7 @@ mod tests {
     #[test]
     fn overlapping_boxes_keep_the_stronger_coverage() {
         let map = rasterize(
-            &rows(&[
+            &rects(&[
                 r#"{"x":10,"y":10,"w":10,"h":10}"#,
                 r#"{"x":15,"y":10,"w":10,"h":10}"#,
             ]),
@@ -362,28 +248,13 @@ mod tests {
     #[test]
     fn a_box_running_off_the_frame_is_clipped_not_refused() {
         let map = rasterize(
-            &rows(&[r#"{"x":-10,"y":-10,"w":30,"h":30}"#]),
+            &rects(&[r#"{"x":-10,"y":-10,"w":30,"h":30}"#]),
             W,
             H,
             params(0.0, 4.0),
         );
         assert_eq!(map[0], KEEP, "the corner the box covers is painted");
         assert_eq!(map[25 * W + 25], 0, "past its clipped extent is not");
-    }
-
-    #[test]
-    fn rows_that_are_not_boxes_are_skipped_rather_than_refused() {
-        let map = rasterize(
-            &rows(&[
-                r#"{"shot":4}"#,
-                "not json at all",
-                r#"{"x":10,"y":10,"w":5,"h":5}"#,
-            ]),
-            W,
-            H,
-            params(0.0, 0.0),
-        );
-        assert_eq!(map[12 * W + 12], KEEP);
     }
 
     #[test]
@@ -395,7 +266,7 @@ mod tests {
     #[test]
     fn a_degenerate_box_paints_nothing() {
         let map = rasterize(
-            &rows(&[r#"{"x":10,"y":10,"w":0,"h":10}"#]),
+            &rects(&[r#"{"x":10,"y":10,"w":0,"h":10}"#]),
             W,
             H,
             params(0.0, 0.0),
@@ -404,25 +275,56 @@ mod tests {
     }
 
     #[test]
-    fn the_matte_frame_keeps_neutral_chroma_and_opaque_alpha() {
-        let map = vec![KEEP; 4 * 4];
-        let yuv = to_frame(&map, PixFmt::Yuv420p, 4, 4, 4 * 4 + 2 * 2 * 2);
-        assert!(yuv[..16].iter().all(|v| *v == KEEP));
-        assert!(yuv[16..].iter().all(|v| *v == 128));
-
-        let rgba = to_frame(&map, PixFmt::Rgba, 4, 4, 4 * 4 * 4);
-        let (pixels, _) = rgba.as_chunks::<4>();
-        for pixel in pixels {
-            assert_eq!(*pixel, [KEEP, KEEP, KEEP, 255]);
+    fn params_outside_the_schema_are_refused_by_name() {
+        for bad in [r#"{"grow":-1}"#, r#"{"feather":5000}"#, r#"{"radius":3}"#] {
+            assert!(read_params::<Params>(PARAMS_SCHEMA, bad).is_err(), "{bad}");
         }
+        let (parsed, _) = read_params::<Params>(PARAMS_SCHEMA, "").expect("empty is the defaults");
+        assert_eq!((parsed.grow, parsed.feather), (0.0, 0.0));
     }
 
     #[test]
-    fn params_outside_the_schema_are_refused_by_name() {
-        assert!(parse_params(r#"{"grow":-1}"#).is_err());
-        assert!(parse_params(r#"{"feather":5000}"#).is_err());
-        assert!(parse_params(r#"{"radius":3}"#).is_err());
-        let parsed = parse_params("").expect("empty is the defaults");
-        assert_eq!((parsed.grow, parsed.feather), (0.0, 0.0));
+    fn the_matte_is_the_picture_in_gray_and_reads_any_row_with_a_box() {
+        let shape = harness("rgba").shape().clone();
+        assert_eq!(shape.clock_input(), Some("v"));
+        let boxes = shape.find_input("boxes").expect("a rows input");
+        let schema: serde_json::Value =
+            serde_json::from_str(boxes.schema.as_deref().expect("a schema")).unwrap();
+        assert_eq!(
+            schema["required"],
+            serde_json::json!(["h", "w", "x", "y"]),
+            "the four fields it reads, and no others asked for"
+        );
+        assert_eq!(schema["properties"]["x"]["type"], "number");
+        assert!(
+            schema.get("additionalProperties").is_none(),
+            "the rest pass"
+        );
+        let like = shape.outputs[0].like.as_ref().expect("follows its input");
+        assert_eq!(
+            (like.port.as_deref(), like.pixel_format.as_deref()),
+            (Some("v"), Some("gray"))
+        );
+        assert!(shape.pure && shape.one_to_one);
+    }
+
+    #[test]
+    fn a_frame_leaves_as_its_matte_without_its_picture_being_read() {
+        for pix_fmt in ["rgba", "yuv420p"] {
+            let mut node = harness(pix_fmt);
+            let row = r#"{"class":"face","conf":0.9,"x":10,"y":10,"w":4,"h":4,"age":8.4}"#;
+            let tick = node
+                .tick(3)
+                .frame_with(0, 3, Some(1), &[], Vec::new())
+                .message(1, 3, row.as_bytes());
+            let emitted = node.process(&tick).unwrap();
+            let [Payload::Frame { pts: 3, data, .. }] = emitted.on("v")[..] else {
+                panic!("no matte: {emitted:?}")
+            };
+            assert_eq!(data.len(), W * H, "one byte a pixel");
+            assert_eq!(data[12 * W + 12], KEEP, "inside the box");
+            assert_eq!(data[8 * W + 8], KEEP, "and grown by two");
+            assert_eq!(data[7 * W + 7], 0, "and no further");
+        }
     }
 }

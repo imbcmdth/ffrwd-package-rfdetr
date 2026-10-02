@@ -15,9 +15,7 @@ jobs:
         with:
           targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
-      - name: Install ffrwd and the wit package
-        run: |
-          pip install ffrwd
-          ffrwd install -g "ffrwd/wasm@$(python -c 'import json; print(json.load(open("ffrwd.json"))["dependencies"]["ffrwd/wasm"])')"
       - name: Build the modules
         run: cargo build --target wasm32-wasip2 --release
+      - name: Unit tests
+        run: cargo test --release

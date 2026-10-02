@@ -1,11 +1,13 @@
 //! What the rfdetr modules share: the COCO class names at the label indices
 //! the graphs use, the box math that brings a normalized coordinate back onto
-//! the frame, and the tap map a separable resize reads. Nothing here touches
-//! `wasi:nn` or the wit bindings, so every module compiles it in as plain
-//! Rust and its tests run on the host.
+//! the frame, the tap map a separable resize reads, the graph run through
+//! `wasi:nn`, and the node every detector is.
 //!
 //! Turning a frame into a tensor is not here: a module asks the host for
 //! `rgba` and `ffrwd-frame` crops, resizes and normalizes it.
+
+pub mod detector;
+pub mod nn;
 
 /// The classes the graphs were trained on, at the label index each graph
 /// reports: COCO's 91-slot category numbering, not the 80 contiguous names.

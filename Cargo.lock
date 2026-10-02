@@ -22,11 +22,11 @@ checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
 name = "boxes-mask"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "ffrwd-node",
  "serde",
  "serde_json",
- "wit-bindgen",
 ]
 
 [[package]]
@@ -37,35 +37,29 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "detect"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
- "ffrwd-frame",
+ "ffrwd-node",
  "rfdetr-common",
- "serde",
  "serde_json",
- "wit-bindgen",
 ]
 
 [[package]]
 name = "detect-faces"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
- "ffrwd-frame",
+ "ffrwd-node",
  "rfdetr-common",
- "serde",
  "serde_json",
- "wit-bindgen",
 ]
 
 [[package]]
 name = "detect-plates"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
- "ffrwd-frame",
+ "ffrwd-node",
  "rfdetr-common",
- "serde",
  "serde_json",
- "wit-bindgen",
 ]
 
 [[package]]
@@ -79,11 +73,11 @@ dependencies = [
 
 [[package]]
 name = "draw-boxes"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "ffrwd-node",
  "serde",
  "serde_json",
- "wit-bindgen",
 ]
 
 [[package]]
@@ -113,10 +107,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "ffrwd-node"
+version = "0.1.0"
+source = "git+https://github.com/imbcmdth/ffrwd-node?tag=v0.1.0#84216905037bae949623b6df22febc8fbbc50e17"
+dependencies = [
+ "serde",
+ "serde_json",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
+name = "fractions"
+version = "0.1.0"
+dependencies = [
+ "ffrwd-node",
+ "serde",
+]
 
 [[package]]
 name = "hashbrown"
@@ -231,17 +243,23 @@ dependencies = [
 
 [[package]]
 name = "rfdetr-common"
-version = "0.1.0"
-
-[[package]]
-name = "segment-mask"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ffrwd-frame",
- "rfdetr-common",
+ "ffrwd-node",
  "serde",
  "serde_json",
  "wit-bindgen",
+]
+
+[[package]]
+name = "segment-mask"
+version = "0.2.0"
+dependencies = [
+ "ffrwd-frame",
+ "ffrwd-node",
+ "rfdetr-common",
+ "serde",
 ]
 
 [[package]]

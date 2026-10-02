@@ -1,52 +1,25 @@
 //! Instance segmentation as a matte: every frame leaves as a grayscale mask
-//! of the instances the model found - 255 where an instance owns the pixel,
-//! 0 everywhere else - optionally narrowed to one class name.
+//! of the instances the model found, 255 where an instance owns the pixel and
+//! 0 everywhere else, optionally narrowed to one class name.
 //!
-//! The graph is RF-DETR Seg Large's export, run through `wasi:nn`. A DETR
-//! head returns a fixed set of queries with no duplicates among them, so
-//! there is no NMS: what comes back is one box, one set of class logits and
-//! one mask per query, the mask a quarter-resolution plane of logits over the
-//! whole square. A pixel is inside an instance where its mask logit crosses
-//! zero - sigmoid rises with its argument and a half is where it crosses zero,
-//! so no sigmoid is computed for the mask at all. The module never opens a
-//! file - the host binds the graph to a name with `-nn segment_mask=<path>`
-//! and this module asks for that name and nothing else.
+//! The graph is RF-DETR Seg Large's export, run through `wasi:nn` and bound
+//! to the name `segment_mask`. A DETR head returns a fixed set of queries
+//! with no duplicates among them, so there is no NMS: what comes back is one
+//! box, one set of class logits and one mask per query, the mask a
+//! quarter-resolution plane of logits over the whole square. A pixel is
+//! inside an instance where its mask logit crosses zero: sigmoid rises with
+//! its argument and a half is where it crosses zero, so no sigmoid is
+//! computed for the mask at all.
 //!
-//! The matte keeps the instance's own geometry, so it feeds straight into
-//! whatever reads a mask beside the picture: the same value in red, green and
-//! blue, opaque.
+//! The matte keeps the instance's own geometry, one byte a pixel, so it
+//! feeds straight into whatever reads a mask beside the picture.
 
-// `generate_all`: the world's interfaces come from two other packages -
-// ffrwd:av and wasi:nn - and without it bindgen expects them to have been
-// generated somewhere else.
-wit_bindgen::generate!({
-    path: ["wit", "wit-world"],
-    // Fully qualified: three packages are in scope, and each has worlds.
-    world: "ffrwd:rfdetr-segment/segment-mask",
-    generate_all,
-});
-
-use std::cell::{Cell, RefCell};
-
-use exports::ffrwd::av::window_filter::{
-    Format, FramePayload, Guest, InWindow, Meta, OutFrame, Processed, StreamInfo, WindowMeta,
-};
 use ffrwd_frame::{Filter, Rect, Rgba, IMAGENET};
-use rfdetr_common::{class_index, frame_box, le_f32s, sigmoid, Taps};
+use ffrwd_node::{Bound, Init, Input, Node, Out, Output, Result, Shape, Tick};
+use rfdetr_common::detector::INPUT_NAME;
+use rfdetr_common::nn::Model;
+use rfdetr_common::{class_index, frame_box, sigmoid, Taps};
 use serde::Deserialize;
-use wasi::nn::graph::{load_by_name, Graph};
-use wasi::nn::inference::GraphExecutionContext;
-use wasi::nn::tensor::{Tensor, TensorType};
-
-/// The name the host binds the graph to. `-nn segment_mask=<path>`.
-const MODEL: &str = "segment_mask";
-
-/// What the export calls its input tensor.
-const INPUT_NAME: &str = "input";
-
-/// The host accepts a position where it accepts a name, which is what an
-/// export that named its input something else is reached by.
-const INPUT_INDEX: &str = "0";
 
 /// The square the graph is run at. The export is static at this size.
 const SIDE: usize = 504;
@@ -62,28 +35,11 @@ const KEEP: u8 = 255;
 
 const PARAMS_SCHEMA: &str = r#"{"type":"object","properties":{"class":{"type":"string"},"conf":{"type":"number","minimum":0,"maximum":1,"default":0.25}},"additionalProperties":false}"#;
 
-fn default_conf() -> f64 {
-    0.25
-}
-
-#[derive(Clone, Deserialize)]
-// The schema says these two and no others, and this is what makes that true.
-#[serde(deny_unknown_fields)]
+#[derive(Deserialize)]
 struct Params {
-    /// One COCO class name to keep, or None for every class.
-    #[serde(default)]
+    /// One COCO class name to keep, or none for every class.
     class: Option<String>,
-    #[serde(default = "default_conf")]
     conf: f64,
-}
-
-impl Default for Params {
-    fn default() -> Self {
-        Params {
-            class: None,
-            conf: default_conf(),
-        }
-    }
 }
 
 /// What the params settled once checked: the class as the graph's own label
@@ -105,39 +61,8 @@ struct Instance {
     query: usize,
 }
 
-/// What `init` settled, plus the graph it loaded.
-struct Opened {
-    width: usize,
-    height: usize,
-    settled: Settled,
-    /// What the graph calls its input, settled by the first call that works.
-    input_name: Cell<&'static str>,
-    /// Held for the life of the instance: building it once is what keeps a
-    /// provider's kernels from being chosen again per frame.
-    context: GraphExecutionContext,
-    /// Kept alive because the context is only valid while its graph is.
-    _graph: Graph,
-}
-
-thread_local! {
-    static OPENED: RefCell<Option<Opened>> = const { RefCell::new(None) };
-}
-
-fn parse_params(params: &str) -> Result<Settled, String> {
-    let trimmed = params.trim();
-    let parsed: Params = if trimmed.is_empty() {
-        Params::default()
-    } else {
-        serde_json::from_str(trimmed)
-            .map_err(|e| format!("segment_mask cannot read its params: {e}"))?
-    };
-    if !parsed.conf.is_finite() || !(0.0..=1.0).contains(&parsed.conf) {
-        return Err(format!(
-            "segment_mask needs conf between 0 and 1, got {}",
-            parsed.conf
-        ));
-    }
-    let class = match parsed.class.as_deref() {
+fn settle(params: &Params) -> Result<Settled, String> {
+    let class = match params.class.as_deref() {
         None | Some("") => None,
         Some(name) => Some(class_index(name).ok_or_else(|| {
             format!(
@@ -148,26 +73,8 @@ fn parse_params(params: &str) -> Result<Settled, String> {
     };
     Ok(Settled {
         class,
-        conf: parsed.conf as f32,
+        conf: params.conf as f32,
     })
-}
-
-/// The spec's spelling of an error code, so a message says what actually
-/// went wrong rather than how this module happens to format things.
-fn failed(what: &str, error: &wasi::nn::errors::Error) -> String {
-    use wasi::nn::errors::ErrorCode;
-    let code = match error.code() {
-        ErrorCode::InvalidArgument => "invalid-argument",
-        ErrorCode::InvalidEncoding => "invalid-encoding",
-        ErrorCode::Timeout => "timeout",
-        ErrorCode::RuntimeError => "runtime-error",
-        ErrorCode::UnsupportedOperation => "unsupported-operation",
-        ErrorCode::TooLarge => "too-large",
-        ErrorCode::NotFound => "not-found",
-        ErrorCode::Security => "security",
-        ErrorCode::Unknown => "unknown",
-    };
-    format!("segment_mask: {what}: {code} ({})", error.data())
 }
 
 /// Which returned tensor is which, by shape: the masks are the rank-4 one,
@@ -323,175 +230,92 @@ fn matte(
     map
 }
 
-/// A matte written as an rgba frame: the same value in red, green and blue,
-/// opaque.
-fn to_frame(map: &[u8], len: usize) -> Vec<u8> {
-    let mut out = vec![0u8; len];
-    for (pixel, value) in out.as_chunks_mut::<4>().0.iter_mut().zip(map) {
-        *pixel = [*value, *value, *value, 255];
-    }
-    out
+struct SegmentMask {
+    v: u32,
+    width: usize,
+    height: usize,
+    settled: Settled,
+    model: Model,
 }
 
-/// One frame through the graph, however the graph names its input.
-fn compute(opened: &Opened, input: &[u8]) -> Result<Vec<(String, Tensor)>, String> {
-    let dimensions = [1, 3, SIDE as u32, SIDE as u32];
-    let name = opened.input_name.get();
-    let tensor = Tensor::new(&dimensions, TensorType::Fp32, input);
-    match opened.context.compute(vec![(name.to_string(), tensor)]) {
-        Ok(returned) => Ok(returned),
-        // An export whose input is not called what this one calls it. The
-        // host takes a position where it takes a name, so the retry names none,
-        // and the name that worked is kept for every frame after this one.
-        Err(_) if name == INPUT_NAME => {
-            opened.input_name.set(INPUT_INDEX);
-            let tensor = Tensor::new(&dimensions, TensorType::Fp32, input);
-            opened
-                .context
-                .compute(vec![(INPUT_INDEX.to_string(), tensor)])
-                .map_err(|e| failed("compute", &e))
-        }
-        Err(e) => Err(failed("compute", &e)),
+impl SegmentMask {
+    /// One frame in, its matte out.
+    fn run(&mut self, pixels: &[u8]) -> Result<Vec<u8>, String> {
+        let (width, height) = (self.width, self.height);
+        let input = ffrwd_frame::tensor(
+            &Rgba::new(pixels, width, height)?,
+            Rect::whole(width, height),
+            SIDE,
+            SIDE,
+            Filter::Bilinear,
+            IMAGENET,
+        );
+        let returned = self.model.run(&[1, 3, SIDE as u32, SIDE as u32], &input)?;
+        let shapes: Vec<Vec<u32>> = returned.iter().map(|r| r.dimensions.clone()).collect();
+        let (boxes, logits, masks) = outputs(&shapes)?;
+        let (mask_h, mask_w) = (shapes[masks][2] as usize, shapes[masks][3] as usize);
+        let found = decode(
+            &returned[boxes].values,
+            &returned[logits].values,
+            self.settled,
+        )?;
+        Ok(matte(
+            &found,
+            &returned[masks].values,
+            (mask_w, mask_h),
+            (width, height),
+        ))
     }
 }
 
-/// One frame in, its matte out.
-fn run(opened: &Opened, frame: &[u8], len: usize) -> Result<Vec<u8>, String> {
-    let (width, height) = (opened.width, opened.height);
-    let input = ffrwd_frame::tensor(
-        &Rgba::new(frame, width, height)?,
-        Rect::whole(width, height),
-        SIDE,
-        SIDE,
-        Filter::Bilinear,
-        IMAGENET,
-    );
-    let returned = compute(opened, &input)?;
-    let tensors: Vec<Tensor> = returned.into_iter().map(|(_, tensor)| tensor).collect();
-    let shapes: Vec<Vec<u32>> = tensors.iter().map(Tensor::dimensions).collect();
-    let (boxes, logits, masks) = outputs(&shapes)?;
+impl Node for SegmentMask {
+    const NAME: &'static str = "segment_mask";
+    const VERSION: &'static str = "0.2.0";
+    const PARAMS_SCHEMA: &'static str = PARAMS_SCHEMA;
+    type Params = Params;
 
-    let mask_h = shapes[masks][2] as usize;
-    let mask_w = shapes[masks][3] as usize;
-
-    let found = decode(
-        &le_f32s(&tensors[boxes].data()),
-        &le_f32s(&tensors[logits].data()),
-        opened.settled,
-    )?;
-    let map = matte(
-        &found,
-        &le_f32s(&tensors[masks].data()),
-        (mask_w, mask_h),
-        (width, height),
-    );
-    Ok(to_frame(&map, len))
-}
-
-struct SegmentMask;
-
-impl Guest for SegmentMask {
-    fn describe() -> WindowMeta {
-        WindowMeta {
-            meta: Meta {
-                name: "segment_mask".to_string(),
-                version: "0.1.0".to_string(),
-                params_schema: PARAMS_SCHEMA.to_string(),
-                rows_schema: String::new(),
-                pixel_formats: vec!["rgba".to_string()],
-                sample_formats: vec![],
-                sample_rates: vec![],
-                channel_counts: vec![],
-                rows_language: vec![],
-            },
-            window: 1,
-            stride: 1,
-            pure: true,
-            one_to_one: true,
-            reads_rows: false,
-            forwards_rows: false,
-            inputs: 1,
-        }
+    fn shape(_: &Params, _: &Bound) -> Result<Shape> {
+        Ok(Shape::new()
+            .input(Input::video("v").clock().pixel_formats(&["rgba"]))
+            .output(Output::like("v").pixel_format("gray"))
+            .pure()
+            .one_to_one())
     }
 
-    fn init(format: Format, _stream_info: StreamInfo, params: String) -> Result<(), String> {
-        let Format::Video(video) = format else {
-            return Err("segment_mask reads frames, and this stream is audio".to_string());
-        };
-        if video.pix_fmt != "rgba" {
-            return Err(format!(
-                "segment_mask does not accept pixel format {}",
-                video.pix_fmt
-            ));
-        }
-        let settled = parse_params(&params)?;
+    fn init(params: Params, init: &Init) -> Result<SegmentMask> {
+        let v = init.stream("v")?;
+        let video = v
+            .video_format()
+            .ok_or("segment_mask reads frames, and `v` is not video")?;
+        Ok(SegmentMask {
+            v: v.id,
+            width: video.width as usize,
+            height: video.height as usize,
+            settled: settle(&params)?,
+            model: Model::load(Self::NAME, Self::NAME, INPUT_NAME)?,
+        })
+    }
 
-        // The graph is loaded once per instance, and the session built once:
-        // the first frame is what a provider picks its kernels on, and every
-        // frame after it reuses them.
-        let graph =
-            load_by_name(MODEL).map_err(|e| failed(&format!("load-by-name({MODEL:?})"), &e))?;
-        let context = graph
-            .init_execution_context()
-            .map_err(|e| failed("init-execution-context", &e))?;
-
-        OPENED.with(|o| {
-            *o.borrow_mut() = Some(Opened {
-                width: video.width as usize,
-                height: video.height as usize,
-                settled,
-                input_name: Cell::new(INPUT_NAME),
-                context,
-                _graph: graph,
-            });
-        });
+    fn set_params(&mut self, params: Params) -> Result<()> {
+        self.settled = settle(&params)?;
         Ok(())
     }
 
-    fn set_params(params: String) -> Result<(), String> {
-        let settled = parse_params(&params)?;
-        OPENED.with(|o| {
-            if let Some(opened) = o.borrow_mut().as_mut() {
-                opened.settled = settled;
-            }
-        });
-        Ok(())
-    }
-
-    fn process(window: &InWindow, _trailing: Vec<String>, _last: bool) -> Processed {
-        // The final call carries nothing: window and stride are 1, so no frame
-        // is ever left over.
-        let mut out = Vec::with_capacity(window.len() as usize);
-        OPENED.with(|opened| {
-            let borrowed = opened.borrow();
-            let opened = borrowed
-                .as_ref()
-                .expect("init loads the graph before any frame arrives");
-            for i in 0..window.len() {
-                let frame = window.fetch(i);
-                // `process` has no way to say no, so a graph that failed
-                // mid-stream stops the run rather than passing a frame off
-                // as a matte.
-                let map = run(opened, &frame, frame.len()).unwrap_or_else(|m| panic!("{m}"));
-                out.push(OutFrame {
-                    pts: window.pts(i),
-                    frame: FramePayload::New(map),
-                    rows: vec![],
-                });
-            }
-        });
-        Processed {
-            frames: out,
-            trailing: vec![],
+    fn process(&mut self, tick: &Tick, out: &mut Out) -> Result<()> {
+        for frame in tick.frames(self.v) {
+            let map = self.run(&tick.fetch(self.v, frame.index))?;
+            out.frame("v", frame.pts, frame.duration, map)?;
         }
+        Ok(())
     }
 }
 
-export!(SegmentMask);
+ffrwd_node::export!(SegmentMask);
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ffrwd_node::{read_params, Runner};
 
     /// The mask plane's side, a quarter of the square the graph is run at.
     const MASK: usize = SIDE / 4;
@@ -608,17 +432,17 @@ mod tests {
     }
 
     #[test]
-    fn a_matte_writes_the_same_value_in_every_channel_and_opaque_alpha() {
-        let map = vec![KEEP; 4 * 4];
-        let rgba = to_frame(&map, 4 * 4 * 4);
-        let (pixels, _) = rgba.as_chunks::<4>();
-        for pixel in pixels {
-            assert_eq!(
-                *pixel,
-                [KEEP, KEEP, KEEP, 255],
-                "equal in every channel, and opaque"
-            );
-        }
+    fn the_matte_is_the_picture_in_gray() {
+        let shape = Runner::<SegmentMask>::shape(r#"{"class":"person"}"#, &["v".to_owned()])
+            .expect("a shape");
+        assert_eq!(shape.clock_input(), Some("v"));
+        assert_eq!(shape.outputs.len(), 1);
+        let like = shape.outputs[0].like.as_ref().expect("follows its input");
+        assert_eq!(
+            (like.port.as_deref(), like.pixel_format.as_deref()),
+            (Some("v"), Some("gray"))
+        );
+        assert!(shape.pure && shape.one_to_one);
     }
 
     #[test]
@@ -637,6 +461,11 @@ mod tests {
         );
         let error = outputs(&[vec![1, 116, 8400], vec![1, 32, 160, 160]]).expect_err("no boxes");
         assert!(error.starts_with("segment_mask: "), "{error}");
+    }
+
+    fn parse_params(params: &str) -> Result<Settled, String> {
+        let (params, _) = read_params::<Params>(PARAMS_SCHEMA, params)?;
+        settle(&params)
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "segment-mask"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [lib]
@@ -8,8 +8,7 @@ name = "segment_mask"
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.57.1"
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
-rfdetr-common = { path = "../common" }
+ffrwd-node = { git = "https://github.com/imbcmdth/ffrwd-node", tag = "v0.1.0" }
 ffrwd-frame = { git = "https://github.com/imbcmdth/ffrwd-frame", tag = "v0.1.0" }
+serde = { version = "1.0.229", features = ["derive"] }
+rfdetr-common = { path = "../common" }
