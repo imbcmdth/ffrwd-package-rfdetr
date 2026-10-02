@@ -6,7 +6,7 @@ plate detection. Same API as YOLO26: `detect`, `detect_faces` and
 utilities turn rows into mattes or drawn overlays, and everything
 downstream is native ffmpeg.
 
-Requires ffrwd 0.29.
+Requires ffrwd 0.29, whose `ffrwd/wasm` is 0.19.1.
 
 ## Model exports
 
@@ -110,7 +110,8 @@ masked on.
   box in pixels, `feather` softens the edge. It reads `x`, `y`, `w` and
   `h` and nothing else, so any rows carrying a box will do, a tracker's
   with fields of its own included (`ffrwd/faceage`'s `ages`). The
-  picture is never read, only its size.
+  picture is read for its times and size alone: it arrives in whatever
+  format the query already has it in, and no pixels are carried for it.
 - `draw_boxes(v, boxes, thickness DEFAULT 2)`: the boxes drawn on the
   picture as green outlines. It reads whole pixels: a query handing it
   boxes whose coordinates are fractions is refused when it compiles,
@@ -154,13 +155,10 @@ A query selecting `detect(v).boxes` selects `detect(v)`.
 
 On the same clips every recipe writes what 0.3 wrote: the pictures of
 the twelve recipes that write one are the same frame for frame, and the
-rows of `detections`, `faces` and `plates` are the same boxes with the
-same confidences, row for row. Those lines no longer carry the `pts`
-and `time` the 0.28 host added to each, which the 0.29 host does not
-yet write for a node's rows. The mattes of `segment_mask` and
-`boxes_mask` are now one byte a pixel in gray rather than the
-picture's own format, which is what the composition in
-`ffrwd/mask_tools` reads them as either way.
+rows of `detections`, `faces` and `plates` are the same rows, `pts` and
+`time` included. The mattes of `segment_mask` and `boxes_mask` are now
+one byte a pixel in gray rather than the picture's own format, which is
+what the composition in `ffrwd/mask_tools` reads them as either way.
 
 ## Building
 

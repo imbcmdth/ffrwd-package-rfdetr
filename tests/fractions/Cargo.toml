@@ -9,5 +9,5 @@ name = "fractions"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-ffrwd-node = { git = "https://github.com/imbcmdth/ffrwd-node", tag = "v0.1.0" }
+ffrwd-node = { git = "https://github.com/imbcmdth/ffrwd-node", tag = "v0.2.0" }
 serde = { version = "1.0.229", features = ["derive"] }

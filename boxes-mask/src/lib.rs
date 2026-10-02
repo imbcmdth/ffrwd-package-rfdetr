@@ -3,8 +3,9 @@
 //! every box outward in pixels; `feather` softens the edge over that many
 //! pixels, falling linearly from the box's edge to nothing.
 //!
-//! The picture itself is never read, only its size, and the matte leaves one
-//! byte a pixel. Any row carrying `x`, `y`, `w` and `h` is a box, so the rows
+//! The picture is read for its times and size alone, so the host hands it in
+//! whatever format its source has and carries no pixels for it; the matte
+//! leaves one byte a pixel. Any row carrying `x`, `y`, `w` and `h` is a box, so the rows
 //! of every detector, and of a tracker that adds fields of its own, read the
 //! same.
 
@@ -103,17 +104,13 @@ struct BoxesMask {
 
 impl Node for BoxesMask {
     const NAME: &'static str = "boxes_mask";
-    const VERSION: &'static str = "0.2.0";
+    const VERSION: &'static str = "0.2.1";
     const PARAMS_SCHEMA: &'static str = PARAMS_SCHEMA;
     type Params = Params;
 
     fn shape(_: &Params, _: &Bound) -> Result<Shape> {
         Ok(Shape::new()
-            .input(
-                Input::video("v")
-                    .clock()
-                    .pixel_formats(&["rgba", "yuv420p"]),
-            )
+            .input(Input::video("v").clock().timing())
             .input(Input::rows("boxes").schema::<Rect>())
             .output(Output::like("v").pixel_format("gray"))
             .pure()
@@ -155,7 +152,7 @@ ffrwd_node::export!(BoxesMask);
 mod tests {
     use super::*;
     use ffrwd_node::mock::Harness;
-    use ffrwd_node::{read_params, BoundStream, Payload, Rational};
+    use ffrwd_node::{read_params, BoundStream, Payload, Rational, Wants};
 
     /// What a matte pixel fully inside a box carries.
     const KEEP: u8 = 255;
@@ -287,6 +284,9 @@ mod tests {
     fn the_matte_is_the_picture_in_gray_and_reads_any_row_with_a_box() {
         let shape = harness("rgba").shape().clone();
         assert_eq!(shape.clock_input(), Some("v"));
+        let v = shape.find_input("v").expect("the picture");
+        assert_eq!(v.accepts.wants, Wants::Timing, "its times and size, never its pixels");
+        assert!(v.accepts.pixel_formats.is_empty(), "in whatever format it comes");
         let boxes = shape.find_input("boxes").expect("a rows input");
         let schema: serde_json::Value =
             serde_json::from_str(boxes.schema.as_deref().expect("a schema")).unwrap();
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn a_frame_leaves_as_its_matte_without_its_picture_being_read() {
-        for pix_fmt in ["rgba", "yuv420p"] {
+        for pix_fmt in ["rgba", "yuv420p", "yuv444p10le"] {
             let mut node = harness(pix_fmt);
             let row = r#"{"class":"face","conf":0.9,"x":10,"y":10,"w":4,"h":4,"age":8.4}"#;
             let tick = node

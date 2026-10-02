@@ -1,6 +1,6 @@
 {
   "name": "ffrwd/rfdetr",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "RF-DETR detection, instance segmentation, face detection and licence plate detection: rows, mattes and the utilities that turn rows into mattes or drawn overlays. The weights are Roboflow's, a third-party face fine-tune and our own plate fine-tune, all Apache-2.0, fetched at install.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/imbcmdth/ffrwd-package-rfdetr",
@@ -8,7 +8,7 @@
     "nn"
   ],
   "dependencies": {
-    "ffrwd/wasm": "0.19.0",
+    "ffrwd/wasm": "0.19.1",
     "ffrwd/mask_tools": "1.1.1"
   },
   "keywords": [

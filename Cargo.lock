@@ -22,7 +22,7 @@ checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
 name = "boxes-mask"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ffrwd-node",
  "serde",
@@ -100,16 +100,16 @@ dependencies = [
 
 [[package]]
 name = "ffrwd-frame"
-version = "0.1.0"
-source = "git+https://github.com/imbcmdth/ffrwd-frame?tag=v0.1.0#de7db7834977ad93545f1af24345b297df2d670f"
+version = "0.1.1"
+source = "git+https://github.com/imbcmdth/ffrwd-frame?tag=v0.1.1#cf8887ce24bf5f5d570fed73b278f10ffee991f1"
 dependencies = [
  "fast_image_resize",
 ]
 
 [[package]]
 name = "ffrwd-node"
-version = "0.1.0"
-source = "git+https://github.com/imbcmdth/ffrwd-node?tag=v0.1.0#84216905037bae949623b6df22febc8fbbc50e17"
+version = "0.2.0"
+source = "git+https://github.com/imbcmdth/ffrwd-node?tag=v0.2.0#c497d710024b1dbed06db360a03e06d6c0fb0882"
 dependencies = [
  "serde",
  "serde_json",

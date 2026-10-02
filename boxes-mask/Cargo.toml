@@ -1,6 +1,6 @@
 [package]
 name = "boxes-mask"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 
 [lib]
@@ -8,7 +8,7 @@ name = "boxes_mask"
 crate-type = ["cdylib"]
 
 [dependencies]
-ffrwd-node = { git = "https://github.com/imbcmdth/ffrwd-node", tag = "v0.1.0" }
+ffrwd-node = { git = "https://github.com/imbcmdth/ffrwd-node", tag = "v0.2.0" }
 serde = { version = "1.0.229", features = ["derive"] }
 
 [dev-dependencies]
