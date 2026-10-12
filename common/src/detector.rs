@@ -119,7 +119,11 @@ pub fn decode<H: Head>(
         ));
     }
     let mut found = Vec::new();
-    for (query, scores) in logits.chunks_exact(H::CLASSES).enumerate() {
+    // `as_chunks` takes its size as a const generic, and a head's class count
+    // is a generic's constant, which cannot be one.
+    #[allow(clippy::chunks_exact_to_as_chunks)]
+    let queries = logits.chunks_exact(H::CLASSES);
+    for (query, scores) in queries.enumerate() {
         let (class, logit) = H::classify(scores);
         let score = sigmoid(logit);
         if score < conf {

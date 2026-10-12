@@ -18,3 +18,21 @@ CREATE FUNCTION draw_boxes(v video_stream,
                            thickness number DEFAULT 2)
 RETURNS video_stream
   AS 'target/wasm32-wasip2/release/draw_boxes.wasm', 'draw_boxes' LANGUAGE wasm;
+
+-- The GPU builds of the same two. With `memory` 'gpu', `boxes_mask_gpu`
+-- paints the matte on the device and it leaves as rgba, the same matte in
+-- red, green and blue; `draw_boxes_gpu` takes the picture as rgba held on
+-- the device and draws the outlines there. With 'host' each is its host
+-- function.
+CREATE FUNCTION boxes_mask_gpu(v video_stream,
+                               boxes STRUCT(x number, y number, w number, h number)[],
+                               grow number DEFAULT 0, feather number DEFAULT 0,
+                               memory text DEFAULT 'gpu')
+RETURNS video_stream
+  AS 'target/wasm32-wasip2/release/boxes_mask_gpu.wasm', 'boxes_mask' LANGUAGE wasm;
+
+CREATE FUNCTION draw_boxes_gpu(v video_stream,
+                               boxes STRUCT(x number, y number, w number, h number)[],
+                               thickness number DEFAULT 2, memory text DEFAULT 'gpu')
+RETURNS video_stream
+  AS 'target/wasm32-wasip2/release/draw_boxes_gpu.wasm', 'draw_boxes' LANGUAGE wasm;

@@ -19,7 +19,15 @@ fn clip() -> PathBuf {
     let clip = std::env::temp_dir().join("rfdetr-fractions-clip.mp4");
     if !clip.exists() {
         let made = Command::new("ffmpeg")
-            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=64x48:rate=5:duration=1"])
+            .args([
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=64x48:rate=5:duration=1",
+            ])
             .arg(&clip)
             .status()
             .expect("ffmpeg runs");

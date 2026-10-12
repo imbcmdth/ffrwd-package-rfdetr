@@ -7,9 +7,16 @@ edition = "2021"
 name = "boxes_mask"
 crate-type = ["cdylib"]
 
+[features]
+# The GPU build: the matte painted on the device and handed to the host as a
+# texture, importing ffrwd:gpu and wasi:webgpu. The `boxes-mask-gpu` crate
+# builds this source with it on, as boxes_mask_gpu.wasm.
+gpu = ["dep:rfdetr-gpu"]
+
 [dependencies]
 ffrwd-node = { git = "https://github.com/imbcmdth/ffrwd-node", tag = "v0.2.0" }
 serde = { version = "1.0.229", features = ["derive"] }
+rfdetr-gpu = { path = "../gpu", optional = true }
 
 [dev-dependencies]
 serde_json = "1.0.151"

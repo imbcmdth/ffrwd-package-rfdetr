@@ -61,35 +61,54 @@ impl Model {
     /// One fp32 tensor of `dimensions` through the graph, and every tensor
     /// it returned, in its own order.
     pub fn run(&mut self, dimensions: &[u32], data: &[u8]) -> Result<Vec<Returned>, String> {
-        let returned = match self.compute(self.input, dimensions, data) {
-            Ok(returned) => returned,
+        let returned = self.compute(|| Ok(Tensor::new(dimensions, TensorType::Fp32, data)))?;
+        Ok(returned
+            .iter()
+            .map(|(_, tensor)| Returned::of(tensor))
+            .collect())
+    }
+
+    /// One tensor `make` hands over through the graph, and every tensor it
+    /// returned, by name, in its own order. A tensor the host made, such as
+    /// `ffrwd:gpu`'s `frame-tensor`, passes straight to the graph. `make` is
+    /// called again when the input name is retried, since `compute` takes
+    /// the tensor it is given.
+    pub fn compute(
+        &mut self,
+        make: impl Fn() -> Result<Tensor, String>,
+    ) -> Result<Vec<(String, Tensor)>, String> {
+        match self
+            .context
+            .compute(vec![(self.input.to_string(), make()?)])
+        {
+            Ok(returned) => Ok(returned),
             // An export whose input is not called what this one calls it. The
             // host takes a position where it takes a name, so the retry names
             // none, and the name that worked is kept for every call after it.
             Err(_) if self.input != INPUT_INDEX => {
                 self.input = INPUT_INDEX;
-                self.compute(INPUT_INDEX, dimensions, data)
-                    .map_err(|e| failed(self.module, "compute", &e))?
+                self.context
+                    .compute(vec![(INPUT_INDEX.to_string(), make()?)])
+                    .map_err(|e| failed(self.module, "compute", &e))
             }
-            Err(e) => return Err(failed(self.module, "compute", &e)),
-        };
-        Ok(returned
-            .into_iter()
-            .map(|(_, tensor)| Returned {
-                dimensions: tensor.dimensions(),
-                values: le_f32s(&tensor.data()),
-            })
-            .collect())
+            Err(e) => Err(failed(self.module, "compute", &e)),
+        }
     }
 
-    fn compute(
-        &self,
-        name: &str,
-        dimensions: &[u32],
-        data: &[u8],
-    ) -> Result<Vec<(String, Tensor)>, Error> {
-        let tensor = Tensor::new(dimensions, TensorType::Fp32, data);
-        self.context.compute(vec![(name.to_string(), tensor)])
+    /// The execution context, for what binds to it, such as an output held
+    /// as a texture.
+    pub fn context(&self) -> &GraphExecutionContext {
+        &self.context
+    }
+}
+
+impl Returned {
+    /// A returned tensor's shape and floats, read back to host memory.
+    pub fn of(tensor: &Tensor) -> Returned {
+        Returned {
+            dimensions: tensor.dimensions(),
+            values: le_f32s(&tensor.data()),
+        }
     }
 }
 

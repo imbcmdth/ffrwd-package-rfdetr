@@ -6,7 +6,7 @@
 //! The graph is RF-DETR Medium fine-tuned on one class, run through `wasi:nn`
 //! and bound to the name `detect_plates`.
 
-use rfdetr_common::detector::{Detector, Head};
+use rfdetr_common::detector::Head;
 
 /// Which of a query's logits is the plate.
 const PLATE_LOGIT: usize = 0;
@@ -32,7 +32,15 @@ impl Head for Plates {
     }
 }
 
-ffrwd_node::export!(Detector<Plates>);
+#[cfg(not(feature = "gpu"))]
+ffrwd_node::export!(rfdetr_common::detector::Detector<Plates>);
+
+// The GPU build: the same head, on the node whose input the host makes from
+// the frame where it is held.
+#[cfg(feature = "gpu")]
+ffrwd_node::export!(rfdetr_gpu::detector::Detector<Plates>);
+#[cfg(feature = "gpu")]
+rfdetr_gpu::export!(rfdetr_gpu::detector::Detector<Plates>);
 
 #[cfg(test)]
 mod tests {

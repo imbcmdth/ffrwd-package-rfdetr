@@ -130,12 +130,40 @@ The composition layer lives in `ffrwd/mask_tools` - `blur_where`,
 share - because it is model-agnostic: any grayscale matte beside any
 stream, all native ffmpeg.
 
+## On the GPU
+
+Each export has a GPU build, called with `_gpu` after its name and the
+same arguments, plus `memory`: `detect_gpu`, `detect_faces_gpu`,
+`detect_plates_gpu`, `segment_mask_gpu`, `boxes_mask_gpu` and
+`draw_boxes_gpu`. With `memory => 'gpu'`, the default, the picture is
+held on the sidecar's device: the detectors' input is made there by the
+host (`ffrwd:gpu/nn.frame-tensor`), and the region decodes the source
+there when the machine's decoder shares the device. The rows still come
+back to host memory, since they are small. `boxes_mask_gpu` paints the
+matte on the device and `draw_boxes_gpu` draws on the picture there; both
+match the host builds byte for byte. `segment_mask_gpu` binds the mask
+output to a texture and paints the matte from it, within 0.2 % of the
+host build's pixels. Their pictures leave as rgba. With `memory =>
+'host'` each GPU build holds nothing on the device.
+
+```sql
+SELECT ffrwd.mask_tools.blur_where_gpu(
+         v, ffrwd.rfdetr.boxes_mask_gpu(v, ffrwd.rfdetr.detect_faces_gpu(v),
+                                        grow => 8, feather => 4))
+```
+
+A GPU build loads the same model file as its host build. A query cannot
+call the host build and the GPU build of one model together: both bind
+the same model name, which the sidecar refuses. `blur-faces-gpu` is
+`blur-faces` with every step on the GPU.
+
 ## Recipes
 
 People: `blur-people`, `mosaic-people`, `spotlight`,
 `replace-background`, `draw`, `detections`. Faces: `blur-faces`,
 `mosaic-faces`, `draw-faces`, `faces`. Plates: `blur-plates`,
-`mosaic-plates`, `draw-plates`, `plates`. Both at once: `redact`. Run
+`mosaic-plates`, `draw-plates`, `plates`. Both at once: `redact`. On the
+GPU: `blur-faces-gpu`. Run
 `ffrwd list ffrwd/rfdetr` for each one's variables, or read the header
 of the recipe file.
 
@@ -177,6 +205,13 @@ tensor with the [ffrwd-frame](https://github.com/imbcmdth/ffrwd-frame)
 crate. `common` holds what the model nodes share: the graph run
 through `wasi:nn`, and the node every detector is, each detector a head
 on it. The tests run on the host and need no model.
+
+Each GPU build is the same source with the `gpu` feature on, built by
+its own `-gpu` crate as `<name>_gpu.wasm`. `gpu` holds what they share:
+the `ffrwd:gpu` bindings over the copy of its wit in `wit-gpu/`, the
+`memory` param, the compute pass plumbing over `wasi:webgpu`, and the
+GPU detector node. The paint passes are checked against the host builds'
+arithmetic in the unit tests, and the WGSL is validated with naga.
 
 `cargo test --release -p fractions -- --ignored`, with the modules built
 and ffrwd 0.29 on the path, compiles a query handing `draw_boxes` boxes

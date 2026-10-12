@@ -5,6 +5,15 @@
 //!
 //! The coordinates are whole pixels, as every detector writes them: a row
 //! whose box is in fractions is refused when the query is compiled.
+//!
+//! One source, two builds. `draw_boxes.wasm` draws on the CPU and imports
+//! nothing of the GPU's. `draw_boxes_gpu.wasm` (the `gpu` feature, built by
+//! the `draw-boxes-gpu` crate) is a node beside `ffrwd:gpu`: on
+//! `memory = "gpu"` the picture is held on the device and the outlines are
+//! drawn there.
+
+#[cfg(feature = "gpu")]
+mod gpu;
 
 use ffrwd_node::{Bound, Init, Input, Node, Out, Output, Result, Shape, Tick};
 use serde::{Deserialize, Serialize};
@@ -228,7 +237,13 @@ impl Node for DrawBoxes {
     }
 }
 
+#[cfg(not(feature = "gpu"))]
 ffrwd_node::export!(DrawBoxes);
+
+#[cfg(feature = "gpu")]
+ffrwd_node::export!(gpu::DrawBoxes);
+#[cfg(feature = "gpu")]
+rfdetr_gpu::export!(gpu::DrawBoxes);
 
 #[cfg(test)]
 mod tests {

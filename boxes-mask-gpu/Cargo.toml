@@ -1,0 +1,24 @@
+[package]
+name = "boxes-mask-gpu"
+version = "0.2.1"
+edition = "2021"
+
+# boxes-mask's own source with the `gpu` feature on: the build that may hold
+# its frames on the GPU, as boxes_mask_gpu.wasm beside the host build's
+# boxes_mask.wasm.
+[lib]
+name = "boxes_mask_gpu"
+path = "../boxes-mask/src/lib.rs"
+crate-type = ["cdylib"]
+
+[features]
+default = ["gpu"]
+gpu = []
+
+[dependencies]
+ffrwd-node = { git = "https://github.com/imbcmdth/ffrwd-node", tag = "v0.2.0" }
+serde = { version = "1.0.229", features = ["derive"] }
+rfdetr-gpu = { path = "../gpu" }
+
+[dev-dependencies]
+serde_json = "1.0.151"

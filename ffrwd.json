@@ -5,6 +5,7 @@
   "license": "Apache-2.0",
   "homepage": "https://github.com/imbcmdth/ffrwd-package-rfdetr",
   "capabilities": [
+    "gpu",
     "nn"
   ],
   "dependencies": {
@@ -34,7 +35,13 @@
     "detect_plates": "src/model.sql",
     "segment_mask": "src/model.sql",
     "boxes_mask": "src/boxes.sql",
-    "draw_boxes": "src/boxes.sql"
+    "draw_boxes": "src/boxes.sql",
+    "detect_gpu": "src/model.sql",
+    "detect_faces_gpu": "src/model.sql",
+    "detect_plates_gpu": "src/model.sql",
+    "segment_mask_gpu": "src/model.sql",
+    "boxes_mask_gpu": "src/boxes.sql",
+    "draw_boxes_gpu": "src/boxes.sql"
   },
   "bin": {
     "blur-people": "recipes/blur-people.sql",
@@ -44,6 +51,7 @@
     "draw": "recipes/draw.sql",
     "detections": "recipes/detections.sql",
     "blur-faces": "recipes/blur-faces.sql",
+    "blur-faces-gpu": "recipes/blur-faces-gpu.sql",
     "mosaic-faces": "recipes/mosaic-faces.sql",
     "draw-faces": "recipes/draw-faces.sql",
     "faces": "recipes/faces.sql",

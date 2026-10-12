@@ -7,7 +7,7 @@
 //! and bound to the name `detect_faces`. The head is one class wide, so there
 //! is no background slot and nothing to take an argmax over.
 
-use rfdetr_common::detector::{Detector, Head};
+use rfdetr_common::detector::Head;
 
 /// How many times its own height a box has to be to count as wide.
 const WIDE_ASPECT: f32 = 1.3;
@@ -43,7 +43,15 @@ impl Head for Faces {
     }
 }
 
-ffrwd_node::export!(Detector<Faces>);
+#[cfg(not(feature = "gpu"))]
+ffrwd_node::export!(rfdetr_common::detector::Detector<Faces>);
+
+// The GPU build: the same head, on the node whose input the host makes from
+// the frame where it is held.
+#[cfg(feature = "gpu")]
+ffrwd_node::export!(rfdetr_gpu::detector::Detector<Faces>);
+#[cfg(feature = "gpu")]
+rfdetr_gpu::export!(rfdetr_gpu::detector::Detector<Faces>);
 
 #[cfg(test)]
 mod tests {

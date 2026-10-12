@@ -25,6 +25,17 @@ name = "boxes-mask"
 version = "0.2.1"
 dependencies = [
  "ffrwd-node",
+ "rfdetr-gpu",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "boxes-mask-gpu"
+version = "0.2.1"
+dependencies = [
+ "ffrwd-node",
+ "rfdetr-gpu",
  "serde",
  "serde_json",
 ]
@@ -41,6 +52,7 @@ version = "0.2.0"
 dependencies = [
  "ffrwd-node",
  "rfdetr-common",
+ "rfdetr-gpu",
  "serde_json",
 ]
 
@@ -50,6 +62,27 @@ version = "0.2.0"
 dependencies = [
  "ffrwd-node",
  "rfdetr-common",
+ "rfdetr-gpu",
+ "serde_json",
+]
+
+[[package]]
+name = "detect-faces-gpu"
+version = "0.2.0"
+dependencies = [
+ "ffrwd-node",
+ "rfdetr-common",
+ "rfdetr-gpu",
+ "serde_json",
+]
+
+[[package]]
+name = "detect-gpu"
+version = "0.2.0"
+dependencies = [
+ "ffrwd-node",
+ "rfdetr-common",
+ "rfdetr-gpu",
  "serde_json",
 ]
 
@@ -59,6 +92,17 @@ version = "0.2.0"
 dependencies = [
  "ffrwd-node",
  "rfdetr-common",
+ "rfdetr-gpu",
+ "serde_json",
+]
+
+[[package]]
+name = "detect-plates-gpu"
+version = "0.2.0"
+dependencies = [
+ "ffrwd-node",
+ "rfdetr-common",
+ "rfdetr-gpu",
  "serde_json",
 ]
 
@@ -76,6 +120,17 @@ name = "draw-boxes"
 version = "0.2.0"
 dependencies = [
  "ffrwd-node",
+ "rfdetr-gpu",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "draw-boxes-gpu"
+version = "0.2.0"
+dependencies = [
+ "ffrwd-node",
+ "rfdetr-gpu",
  "serde",
  "serde_json",
 ]
@@ -253,12 +308,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "rfdetr-gpu"
+version = "0.1.0"
+dependencies = [
+ "ffrwd-frame",
+ "ffrwd-node",
+ "rfdetr-common",
+ "serde",
+ "serde_json",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "segment-mask"
 version = "0.2.0"
 dependencies = [
  "ffrwd-frame",
  "ffrwd-node",
  "rfdetr-common",
+ "rfdetr-gpu",
+ "serde",
+]
+
+[[package]]
+name = "segment-mask-gpu"
+version = "0.2.0"
+dependencies = [
+ "ffrwd-frame",
+ "ffrwd-node",
+ "rfdetr-common",
+ "rfdetr-gpu",
  "serde",
 ]
 

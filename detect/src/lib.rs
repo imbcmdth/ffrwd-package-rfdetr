@@ -5,7 +5,7 @@
 //! the name `detect`. Each query's class is whichever of its logits is
 //! largest.
 
-use rfdetr_common::detector::{Detector, Head};
+use rfdetr_common::detector::Head;
 
 pub struct Coco;
 
@@ -33,7 +33,15 @@ impl Head for Coco {
     }
 }
 
-ffrwd_node::export!(Detector<Coco>);
+#[cfg(not(feature = "gpu"))]
+ffrwd_node::export!(rfdetr_common::detector::Detector<Coco>);
+
+// The GPU build: the same head, on the node whose input the host makes from
+// the frame where it is held.
+#[cfg(feature = "gpu")]
+ffrwd_node::export!(rfdetr_gpu::detector::Detector<Coco>);
+#[cfg(feature = "gpu")]
+rfdetr_gpu::export!(rfdetr_gpu::detector::Detector<Coco>);
 
 #[cfg(test)]
 mod tests {

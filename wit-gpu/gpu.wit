@@ -1,0 +1,237 @@
+// ffrwd:gpu 0.1.0: frames a node reads and writes on the GPU.
+//
+// A companion to the node world (`ffrwd:av@0.19.1`), beside which a module
+// includes it. The node world is unchanged: a module that reads its
+// pictures as textures of the sidecar's device, and hands pictures back
+// as textures, exports `ports` to say which of its ports those are and
+// imports `frames` to reach them. Every texture is on the one device the
+// module's `wasi:webgpu` answers, so nothing is copied between the host's
+// frames and the module's own textures.
+//
+// A port held on the GPU is still a video port of the node world: its
+// frames arrive in `tick.frames` with their times, `fetch` still answers
+// with bytes (a download, done once per frame), and `same` still passes a
+// frame through. What `frames` adds is the planes as textures and a way to
+// emit a texture; what `nn` adds is a frame made into a model's input
+// tensor (or crops of a frame, batched into one tensor) without the module
+// fetching its bytes, and a model's output held as a texture without the
+// module reading it back.
+
+package ffrwd:gpu@0.1.0;
+
+interface types {
+  /// Where a port's frames are held.
+  enum frame-memory {
+    /// In host memory, crossing into the module on `fetch`: the node
+    /// world's own way, and every port's unless `ports.memory` says gpu.
+    host,
+    /// On the sidecar's device. An input's frames reach the module as
+    /// textures through `frames.planes`; an output's leave through
+    /// `frames.emit`.
+    gpu,
+  }
+
+  /// One port's memory, by the port's name in the node's shape.
+  record port-memory {
+    port: string,
+    memory: frame-memory,
+  }
+}
+
+/// What a module declares beside its shape.
+interface ports {
+  use types.{port-memory};
+
+  /// For the shape `shape(params, bound)` of the node world answers with
+  /// these params: the ports whose frames are held on the GPU. A port not
+  /// named is host memory. An input named here takes frames in the
+  /// formats the sidecar holds on the GPU (rgba, yuv420p, yuv422p,
+  /// yuv444p), one texture per plane; an output named here is written
+  /// through `frames.emit` as rgba. A name the shape does not declare, or
+  /// a port that is not a video port, is refused by the host.
+  memory: func(params: string) -> list<port-memory>;
+}
+
+/// The frames of the tick being processed, as textures of the module's
+/// device, and the way a texture leaves.
+interface frames {
+  use wasi:webgpu/webgpu@0.0.1.{gpu-texture};
+
+  /// The planes of frame `index` of stream `id` this tick, as the node
+  /// world's `tick.frames` numbers it, one texture per plane in the wire's
+  /// plane order: one `rgba8unorm` texture for rgba, three `r8unorm`
+  /// textures for a planar yuv format, the chroma planes at their own
+  /// size. The textures are the host's: valid for this call, read-only to
+  /// the module (`texture-binding` and `copy-src`), and dropping the
+  /// handle drops nothing. A stream not bound to a port held on the GPU,
+  /// or an index past the tick's frames, is an error.
+  planes: func(id: u32, index: u32) -> result<list<gpu-texture>, string>;
+
+  /// Hands a texture the module made on its device to the host as a frame
+  /// on output `port`, at `pts` in the port's time base, as `payload.frame`
+  /// would. The texture is `rgba8unorm`, `texture-binding` and `copy-src`
+  /// at least, and the port's size; the host takes it, and the module's
+  /// handle is spent. The frame leaves after the items `process` returns
+  /// on that port, in the order emitted. A texture `planes` handed over is
+  /// refused: a frame passed through unchanged is `payload.same`.
+  emit: func(port: string, pts: s64, duration: option<s64>, texture: gpu-texture) -> result<_, string>;
+}
+
+/// Inference inputs made from the tick's frames, and outputs held as
+/// textures, for a module that runs a model through `wasi:nn`. A frame held
+/// on the GPU is made into the model's input on the device, and where the
+/// model's session can read the device's memory the tensor is that memory,
+/// bound to the session with no copy; elsewhere the tensor is made the same
+/// way and read back once. A frame in host memory is made into a tensor on
+/// the CPU, the same way. Whichever way it went, the tensor is an ordinary
+/// `wasi:nn` tensor the module passes to `compute`, and the host says on
+/// stderr, once per model, which way that was. An output bound to a texture
+/// is written there by every `compute`, by the session itself where it can
+/// write the device's memory, and the host says which way that was too.
+interface nn {
+  use wasi:nn/tensor@0.2.0-rc-2024-10-28.{tensor};
+  use wasi:nn/inference@0.2.0-rc-2024-10-28.{graph-execution-context};
+  use wasi:webgpu/webgpu@0.0.1.{gpu-texture};
+
+  /// How the tensor's elements are laid out: `nchw` is [1, 3, height,
+  /// width], one plane per channel; `nhwc` is [1, height, width, 3], the
+  /// channels of each pixel together.
+  enum tensor-layout {
+    nchw,
+    nhwc,
+  }
+
+  /// The order of the three channels.
+  enum channel-order {
+    rgb,
+    bgr,
+  }
+
+  /// How the frame is fitted to the tensor's size: `stretch` scales each
+  /// side on its own; `letterbox` scales both by the same factor, the
+  /// largest that fits, centres the picture, and fills the rest with
+  /// `pad`.
+  enum fit {
+    stretch,
+    letterbox,
+  }
+
+  /// The kernel a picture is resampled with: `bilinear` is linear in each
+  /// direction, `bicubic` is Keys' cubic with a = -0.5 (Catmull-Rom),
+  /// which is Pillow's BICUBIC.
+  enum resize-filter {
+    bilinear,
+    bicubic,
+  }
+
+  /// What the tensor is made as.
+  record frame-tensor-options {
+    /// The model the tensor is for, by the name `-nn` binds it to and
+    /// `load-by-name` takes. Its session decides whether the tensor can
+    /// stay on the device.
+    model: string,
+    /// The tensor's picture size.
+    width: u32,
+    height: u32,
+    layout: tensor-layout,
+    order: channel-order,
+    fit: fit,
+    /// What a letterbox's bars hold in every channel, read as 0 to 1 like
+    /// the picture: 0 is black, 114/255 the grey YOLO models are trained
+    /// on.
+    pad: f32,
+    /// Each channel is read as 0 to 1 (the stream's YUV made RGB with its
+    /// own matrix and range), then becomes `(value * scale - mean) / std`:
+    /// `scale` 1, `mean` 0 and `std` 1 leave 0 to 1, and `scale` 255
+    /// gives 0 to 255. `mean` and `std` are in the order `order` names.
+    scale: f32,
+    mean: tuple<f32, f32, f32>,
+    std: tuple<f32, f32, f32>,
+    /// The resampling kernel.
+    filter: resize-filter,
+    /// Whether the kernel is widened by the scale where the picture
+    /// shrinks, so that every source pixel under an output pixel is read,
+    /// as Pillow's `resize` and PyTorch's `antialias` do. Without it the
+    /// kernel keeps its own width at every scale: two samples across for
+    /// `bilinear`, four for `bicubic`.
+    antialias: bool,
+  }
+
+  /// A rectangle of a frame, in the frame's pixels: its left and top edges
+  /// and its size.
+  record rect {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+  }
+
+  /// Frame `index` of stream `id` this tick, as `frames.planes` numbers
+  /// it, as an fp32 tensor of the shape `options.layout` names. The frame
+  /// is resampled from pixel centres with `options.filter`, widened where
+  /// `options.antialias` says (the chroma of a subsampled frame sited at
+  /// the centre of the pixels it covers, and each sample made RGB before
+  /// it is weighed), and the weighed value is clamped to 0 to 1. Near an
+  /// edge the weights of the samples past it are dropped and the rest
+  /// scaled to sum to 1, as Pillow does. The tensor
+  /// is valid for this call of `process`; it may be passed to `compute` of
+  /// the graph `options.model` names, and `data` reads its elements back.
+  /// A stream not bound at `init`, an index past the tick's frames, a
+  /// model no `-nn` binds, a size of 0, or a `std` of 0 is an error.
+  frame-tensor: func(id: u32, index: u32, options: frame-tensor-options) -> result<tensor, string>;
+
+  /// Rectangles `crops` of frame `index` of stream `id`, each made into a
+  /// picture of the tensor the way `frame-tensor` makes a whole frame, as
+  /// one fp32 tensor with the crops along its first dimension, in the
+  /// order given: [N, 3, height, width] for `nchw`, [N, height, width, 3]
+  /// for `nhwc`. Each crop is fitted to the tensor's size on its own, and
+  /// its edges are the edges the resampling stops at, so a crop reads only
+  /// its own pixels, as a crop cut out and then resized does. A rectangle
+  /// reaching past the frame is cut to it. An empty list, a rectangle with
+  /// nothing of it on the frame, and everything `frame-tensor` refuses are
+  /// errors.
+  crops-tensor: func(id: u32, index: u32, crops: list<rect>, options: frame-tensor-options) -> result<tensor, string>;
+
+  /// An output of a graph held as a texture.
+  record output-texture-options {
+    /// The graph's name for the output.
+    output: string,
+    /// The texture's size. The output's fp32 elements are its texels in
+    /// order, row by row, so it has `width * height` of them; the output's
+    /// dynamic dimensions are taken as the last the width, the one before
+    /// it the height, and any others 1.
+    width: u32,
+    height: u32,
+  }
+
+  /// Binds output `options.output` of `context` to an `r32float` texture
+  /// of the module's device, one element a texel: from the next `compute`
+  /// of `context` on, each writes the output there, and a pass the module
+  /// submits after `compute` returns reads what that `compute` wrote.
+  /// Where the session can write the device's memory the output never
+  /// leaves the device; elsewhere it comes back to host memory and is
+  /// uploaded into the texture once. `compute` still lists the output, and
+  /// its `data` reads the elements back. The texture is the host's, valid
+  /// as long as `context` is, read-only to the module (`texture-binding`
+  /// and `copy-src`), and dropping the handle drops nothing; binding the
+  /// same output again at the same size answers the same texture. An
+  /// output the graph does not have, one that is not fp32, a size of 0 or
+  /// one whose element count the output's shape cannot have is an error.
+  output-texture: func(context: borrow<graph-execution-context>, options: output-texture-options) -> result<gpu-texture, string>;
+}
+
+/// What a module includes beside `ffrwd:av/node-module`.
+world gpu-module {
+  import wasi:webgpu/webgpu@0.0.1;
+  import frames;
+  export ports;
+}
+
+/// `gpu-module`, and inference inputs made from frames and outputs held as
+/// textures. The module imports
+/// the `wasi:nn` interfaces it calls (`graph`, `inference`, `errors`)
+/// itself.
+world gpu-nn-module {
+  include gpu-module;
+  import nn;
+}

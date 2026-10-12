@@ -8,6 +8,15 @@
 //! leaves one byte a pixel. Any row carrying `x`, `y`, `w` and `h` is a box, so the rows
 //! of every detector, and of a tracker that adds fields of its own, read the
 //! same.
+//!
+//! One source, two builds. `boxes_mask.wasm` paints the matte on the CPU and
+//! imports nothing of the GPU's. `boxes_mask_gpu.wasm` (the `gpu` feature,
+//! built by the `boxes-mask-gpu` crate) is a node beside `ffrwd:gpu`: on
+//! `memory = "gpu"` it paints the matte on the device and hands it to the
+//! host as a texture.
+
+#[cfg(feature = "gpu")]
+mod gpu;
 
 use ffrwd_node::{Bound, Init, Input, Node, Out, Output, Result, Shape, Tick};
 use serde::{Deserialize, Serialize};
@@ -43,13 +52,21 @@ fn axis_alpha(p: f64, edge0: f64, edge1: f64, feather: f64) -> f64 {
     (1.0 - outside / feather).max(0.0)
 }
 
-/// One box painted into the matte, combined by max so overlapping boxes keep
-/// each other's coverage. The horizontal ramp is computed once per box; each
-/// row then scales it by its own vertical alpha, one multiply and one store
-/// along a contiguous run.
-fn paint(map: &mut [u8], width: usize, height: usize, rect: &Rect, params: Params) {
+/// The pixels one box reaches on the matte, and the alpha of each of their
+/// columns and rows, in eight bits so the combining stays integer: the
+/// horizontal ramp is computed once per box, the vertical once per row.
+struct Footprint {
+    first_x: usize,
+    first_y: usize,
+    columns: Vec<u16>,
+    rows: Vec<u16>,
+}
+
+/// Where `rect`, grown and feathered, lands on a `width` by `height` matte,
+/// or None when it reaches no pixel of it.
+fn footprint(width: usize, height: usize, rect: &Rect, params: Params) -> Option<Footprint> {
     if rect.w <= 0.0 || rect.h <= 0.0 {
-        return;
+        return None;
     }
     let (grow, feather) = (params.grow, params.feather);
     let x0 = rect.x - grow;
@@ -62,21 +79,34 @@ fn paint(map: &mut [u8], width: usize, height: usize, rect: &Rect, params: Param
     let first_y = (y0 - feather).floor().max(0.0) as usize;
     let last_y = ((y1 + feather).ceil().min(height as f64) as usize).max(first_y);
     if first_x == last_x || first_y == last_y {
-        return;
+        return None;
     }
 
-    // The horizontal ramp, in eight bits so the row loop stays integer.
-    let ramp: Vec<u16> = (first_x..last_x)
-        .map(|x| (axis_alpha(x as f64 + 0.5, x0, x1, feather) * 255.0).round() as u16)
-        .collect();
+    let alpha = |p: usize, edge0: f64, edge1: f64| {
+        (axis_alpha(p as f64 + 0.5, edge0, edge1, feather) * 255.0).round() as u16
+    };
+    Some(Footprint {
+        first_x,
+        first_y,
+        columns: (first_x..last_x).map(|x| alpha(x, x0, x1)).collect(),
+        rows: (first_y..last_y).map(|y| alpha(y, y0, y1)).collect(),
+    })
+}
 
-    for y in first_y..last_y {
-        let ay = (axis_alpha(y as f64 + 0.5, y0, y1, feather) * 255.0).round() as u16;
-        if ay == 0 {
+/// One box painted into the matte, combined by max so overlapping boxes keep
+/// each other's coverage. Each row scales the horizontal ramp by its own
+/// vertical alpha, one multiply and one store along a contiguous run.
+fn paint(map: &mut [u8], width: usize, height: usize, rect: &Rect, params: Params) {
+    let Some(footprint) = footprint(width, height, rect, params) else {
+        return;
+    };
+    let (first_x, run) = (footprint.first_x, footprint.columns.len());
+    for (y, ay) in (footprint.first_y..).zip(&footprint.rows) {
+        if *ay == 0 {
             continue;
         }
-        let row = &mut map[y * width + first_x..y * width + last_x];
-        for (slot, ax) in row.iter_mut().zip(&ramp) {
+        let row = &mut map[y * width + first_x..y * width + first_x + run];
+        for (slot, ax) in row.iter_mut().zip(&footprint.columns) {
             let value = ((ax * ay + 127) / 255) as u8;
             if value > *slot {
                 *slot = value;
@@ -146,7 +176,13 @@ impl Node for BoxesMask {
     }
 }
 
+#[cfg(not(feature = "gpu"))]
 ffrwd_node::export!(BoxesMask);
+
+#[cfg(feature = "gpu")]
+ffrwd_node::export!(gpu::BoxesMask);
+#[cfg(feature = "gpu")]
+rfdetr_gpu::export!(gpu::BoxesMask);
 
 #[cfg(test)]
 mod tests {
@@ -285,8 +321,15 @@ mod tests {
         let shape = harness("rgba").shape().clone();
         assert_eq!(shape.clock_input(), Some("v"));
         let v = shape.find_input("v").expect("the picture");
-        assert_eq!(v.accepts.wants, Wants::Timing, "its times and size, never its pixels");
-        assert!(v.accepts.pixel_formats.is_empty(), "in whatever format it comes");
+        assert_eq!(
+            v.accepts.wants,
+            Wants::Timing,
+            "its times and size, never its pixels"
+        );
+        assert!(
+            v.accepts.pixel_formats.is_empty(),
+            "in whatever format it comes"
+        );
         let boxes = shape.find_input("boxes").expect("a rows input");
         let schema: serde_json::Value =
             serde_json::from_str(boxes.schema.as_deref().expect("a schema")).unwrap();

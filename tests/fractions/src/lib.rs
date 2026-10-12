@@ -37,7 +37,12 @@ impl Node for Fractions {
 
     fn process(&mut self, tick: &Tick, out: &mut Out) -> Result<()> {
         for frame in tick.frames(self.v) {
-            let row = Fraction { x: 1.5, y: 2.5, w: 10.25, h: 8.75 };
+            let row = Fraction {
+                x: 1.5,
+                y: 2.5,
+                w: 10.25,
+                h: 8.75,
+            };
             out.row("boxes", frame.pts, &row)?;
         }
         Ok(())

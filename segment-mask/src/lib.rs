@@ -13,6 +13,16 @@
 //!
 //! The matte keeps the instance's own geometry, one byte a pixel, so it
 //! feeds straight into whatever reads a mask beside the picture.
+//!
+//! One source, two builds. `segment_mask.wasm` makes the graph's input
+//! itself and paints the matte on the CPU, and imports nothing of the GPU's.
+//! `segment_mask_gpu.wasm` (the `gpu` feature, built by the
+//! `segment-mask-gpu` crate) is a node beside `ffrwd:gpu`: the host makes
+//! the graph's input, and on `memory = "gpu"` the frames stay on the device
+//! and the matte is painted there.
+
+#[cfg(feature = "gpu")]
+mod gpu;
 
 use ffrwd_frame::{Filter, Rect, Rgba, IMAGENET};
 use ffrwd_node::{Bound, Init, Input, Node, Out, Output, Result, Shape, Tick};
@@ -230,6 +240,9 @@ fn matte(
     map
 }
 
+// The GPU build makes its input through the host and reads only this node's
+// shape, so it never opens one.
+#[cfg_attr(feature = "gpu", allow(dead_code))]
 struct SegmentMask {
     v: u32,
     width: usize,
@@ -238,6 +251,7 @@ struct SegmentMask {
     model: Model,
 }
 
+#[cfg_attr(feature = "gpu", allow(dead_code))]
 impl SegmentMask {
     /// One frame in, its matte out.
     fn run(&mut self, pixels: &[u8]) -> Result<Vec<u8>, String> {
@@ -310,7 +324,13 @@ impl Node for SegmentMask {
     }
 }
 
+#[cfg(not(feature = "gpu"))]
 ffrwd_node::export!(SegmentMask);
+
+#[cfg(feature = "gpu")]
+ffrwd_node::export!(gpu::SegmentMask);
+#[cfg(feature = "gpu")]
+rfdetr_gpu::export!(gpu::SegmentMask);
 
 #[cfg(test)]
 mod tests {

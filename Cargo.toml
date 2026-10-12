@@ -2,15 +2,24 @@
 # The wasm modules this package ships. They build into
 # target/wasm32-wasip2/release/, which is where the package's lib SQL names
 # them. `common` is shared Rust the modules compile in; it ships nothing of
-# its own. `tests/fractions` is a test fixture no lib SQL names.
+# its own, and neither does `gpu`, what the GPU builds share. Each `-gpu`
+# crate builds its module's own source with the `gpu` feature on, as
+# `<name>_gpu.wasm`. `tests/fractions` is a test fixture no lib SQL names.
 members = [
     "common",
+    "gpu",
     "detect",
+    "detect-gpu",
     "detect-faces",
+    "detect-faces-gpu",
     "detect-plates",
+    "detect-plates-gpu",
     "segment-mask",
+    "segment-mask-gpu",
     "boxes-mask",
+    "boxes-mask-gpu",
     "draw-boxes",
+    "draw-boxes-gpu",
     "tests/fractions",
 ]
 resolver = "2"

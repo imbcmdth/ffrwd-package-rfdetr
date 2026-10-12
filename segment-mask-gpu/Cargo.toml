@@ -1,0 +1,23 @@
+[package]
+name = "segment-mask-gpu"
+version = "0.2.0"
+edition = "2021"
+
+# segment-mask's own source with the `gpu` feature on: the build that may hold
+# its frames on the GPU, as segment_mask_gpu.wasm beside the host build's
+# segment_mask.wasm.
+[lib]
+name = "segment_mask_gpu"
+path = "../segment-mask/src/lib.rs"
+crate-type = ["cdylib"]
+
+[features]
+default = ["gpu"]
+gpu = []
+
+[dependencies]
+ffrwd-node = { git = "https://github.com/imbcmdth/ffrwd-node", tag = "v0.2.0" }
+ffrwd-frame = { git = "https://github.com/imbcmdth/ffrwd-frame", tag = "v0.1.1" }
+serde = { version = "1.0.229", features = ["derive"] }
+rfdetr-common = { path = "../common" }
+rfdetr-gpu = { path = "../gpu" }
