@@ -6,7 +6,7 @@ plate detection. Same API as YOLO26: `detect`, `detect_faces` and
 utilities turn rows into mattes or drawn overlays, and everything
 downstream is native ffmpeg.
 
-Requires ffrwd 0.29, whose `ffrwd/wasm` is 0.19.1.
+Requires ffrwd 0.30, whose `ffrwd/wasm` is 0.19.1.
 
 ## Model exports
 
@@ -144,7 +144,8 @@ matte on the device and `draw_boxes_gpu` draws on the picture there; both
 match the host builds byte for byte. `segment_mask_gpu` binds the mask
 output to a texture and paints the matte from it, within 0.2 % of the
 host build's pixels. Their pictures leave as rgba. With `memory =>
-'host'` each GPU build holds nothing on the device.
+'host'` each GPU build holds nothing on the device. The GPU builds
+need ffrwd 0.30.
 
 ```sql
 SELECT ffrwd.mask_tools.blur_where_gpu(
